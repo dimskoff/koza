@@ -198,9 +198,9 @@ export function Shortener() {
   return (
     <div className="relative mx-auto w-full max-w-2xl">
       {/* ── one card — button inside the input, options row under it ── */}
-      <div className="kz-edge relative overflow-hidden p-2">
+      <div className="kz-edge relative overflow-hidden p-1.5 pb-2">
         {/* input row — the coral button lives right inside the field */}
-        <div className="kz-inset flex items-center gap-2 p-2 pl-4">
+        <div className="kz-inset flex items-center gap-2 p-1.5 pl-3.5">
           <input
             ref={inputRef}
             value={destination}
@@ -269,7 +269,7 @@ export function Shortener() {
         </div>
 
         {/* options row — same card, right under the field */}
-        <div className="flex items-center justify-between px-4 pb-1 pt-3">
+        <div className="flex items-center justify-between px-3.5 pb-0.5 pt-1.5">
           <button
             onClick={() => setAdvancedOpen((v) => !v)}
             aria-expanded={advancedOpen}
