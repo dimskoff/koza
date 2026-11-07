@@ -1,0 +1,4 @@
+# Reference docker-compose.yml in root for full stack configuration.
+# Run from repository root: docker compose up -d
+include:
+  - ../docker-compose.yml

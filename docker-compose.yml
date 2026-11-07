@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────
+# koza — Self-Hosted Stack
+#
+#   Quickstart (local):   docker compose up -d --build
+#   With TURN relay:      docker compose --profile turn up -d --build
+#   With automatic HTTPS: docker compose --profile proxy up -d --build
+#   Everything:           docker compose --profile proxy --profile turn up -d --build
+#
+# Copy .env.example to .env before starting.
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: koza-web
+    restart: unless-stopped
+    ports:
+      - "${KOZA_WEB_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - KOZA_API_URL=http://api:8787
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: koza-api
+    restart: unless-stopped
+    ports:
+      - "${KOZA_API_PORT:-8787}:8787"
+    environment:
+      - NODE_ENV=production
+      - PORT=8787
+      - KOZA_DATA_DIR=/data
+      - KOZA_ADMIN_KEY=${KOZA_ADMIN_KEY:-}
+      - KOZA_BASE_URL=${KOZA_BASE_URL:-http://localhost:3000}
+      - KOZA_TURN_SECRET=${KOZA_TURN_SECRET:-}
+      - KOZA_TURN_URLS=${KOZA_TURN_URLS:-}
+    volumes:
+      - koza-data:/data
+
+  # ── TURN Relay (Optional) ───────────────────────────────────────────
+  # Used for direct P2P fallback when symmetric NAT prevents direct connection.
+  coturn:
+    image: coturn/coturn:alpine
+    container_name: koza-turn
+    profiles: ["turn"]
+    restart: unless-stopped
+    network_mode: host
+    command:
+      [
+        "-n",
+        "--listening-port=3478",
+        "--min-port=49160",
+        "--max-port=49200",
+        "--use-auth-secret",
+        "--static-auth-secret=${KOZA_TURN_SECRET:-}",
+        "--realm=${KOZA_REALM:-localhost}",
+        "--no-multicast-peers",
+        "--no-cli",
+      ]
+
+  # ── Automatic HTTPS Proxy (Optional) ────────────────────────────────
+  # Automatic Let's Encrypt certificates via Caddy.
+  caddy:
+    image: caddy:2-alpine
+    container_name: koza-caddy
+    profiles: ["proxy"]
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  koza-data:
+  caddy_data:
+  caddy_config:
