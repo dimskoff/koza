@@ -197,10 +197,10 @@ export function Shortener() {
 
   return (
     <div className="relative mx-auto w-full max-w-2xl">
-      {/* ── one card — button inside the input, options row under it ── */}
-      <div className="kz-edge relative overflow-hidden p-1.5 pb-2">
-        {/* input row — the coral button lives right inside the field */}
-        <div className="kz-inset flex items-center gap-2 p-1.5 pl-3.5">
+      {/* ── one card — input flush to top, left, right; options row below ── */}
+      <div className="kz-edge relative overflow-hidden pb-2.5">
+        {/* input row — zero margins to top/left/right */}
+        <div className="flex items-center gap-2 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4 transition-colors focus-within:bg-white/[0.04]">
           <input
             ref={inputRef}
             value={destination}
@@ -268,8 +268,8 @@ export function Shortener() {
           </motion.button>
         </div>
 
-        {/* options row — same card, right under the field */}
-        <div className="flex items-center justify-between px-3.5 pb-0.5 pt-1.5">
+        {/* options row — comfortable padding inside the card */}
+        <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
           <button
             onClick={() => setAdvancedOpen((v) => !v)}
             aria-expanded={advancedOpen}
