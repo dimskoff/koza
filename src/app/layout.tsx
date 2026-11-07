@@ -1,24 +1,10 @@
 import type { Metadata } from "next";
-import { Inter, Geist_Mono } from "next/font/google";
 import { WipeLayer } from "@/components/wipe";
 import "./globals.css";
 
-/* ── Site 1 (root route) fonts ─────────────────────────────── */
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-});
-
 export const metadata: Metadata = {
   title: "koza.click",
-  description: "Short links, zero friction.",
+  description: "Short links, zero strings.",
   icons: {
     icon:
       "data:image/svg+xml," +
@@ -35,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${geistMono.variable} antialiased`}>
+      <body className="antialiased">
         {children}
         <WipeLayer />
       </body>
