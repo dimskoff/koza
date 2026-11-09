@@ -43,15 +43,6 @@ services:
       - traefik.http.routers.koza-web-websecure.tls.certresolver=letsencrypt
       - traefik.http.routers.koza-web-websecure.priority=10
       - traefik.http.services.koza-web.loadbalancer.server.port=3000
-      # box domain root / -> /box
-      - traefik.http.middlewares.koza-box-root.replacepathregex.regex=^/$
-      - traefik.http.middlewares.koza-box-root.replacepathregex.replacement=/box
-      - traefik.http.routers.koza-box-root-websecure.entrypoints=websecure
-      - traefik.http.routers.koza-box-root-websecure.rule=Host(`${KOZA_BOX_HOST:-box.koza.click}`) && Path(`/`)
-      - traefik.http.routers.koza-box-root-websecure.middlewares=koza-box-root@docker
-      - traefik.http.routers.koza-box-root-websecure.tls.certresolver=letsencrypt
-      - traefik.http.routers.koza-box-root-websecure.priority=50
-      - traefik.http.routers.koza-box-root-websecure.service=koza-web
 
   api:
     build:
