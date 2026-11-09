@@ -4,8 +4,9 @@
 export {
   switchTo,
   wipeTo,
-  useProductState,
-  useSiteTransition,
+  useProductTransition,
   WipeLayer,
+  getProductUrl,
+  navigateToProduct,
 } from "./transition";
 export type { ProductMode } from "./transition";

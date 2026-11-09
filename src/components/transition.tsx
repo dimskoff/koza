@@ -6,12 +6,10 @@ import { useSyncExternalStore } from "react";
 export type ProductMode = "url" | "box";
 
 interface TransitionStore {
-  mode: ProductMode;
   isSwitchingTo: ProductMode | null;
 }
 
 let storeState: TransitionStore = {
-  mode: "url",
   isSwitchingTo: null,
 };
 
@@ -23,58 +21,79 @@ function emitChange() {
   }
 }
 
-export function initProductMode(initial: ProductMode) {
-  if (storeState.mode !== initial && storeState.isSwitchingTo === null) {
-    storeState = { ...storeState, mode: initial };
-    emitChange();
+export function isProductionDomain(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname.toLowerCase();
+  return h === "koza.click" || h === "www.koza.click" || h === "box.koza.click";
+}
+
+export function getProductUrl(target: ProductMode): string {
+  if (typeof window === "undefined") {
+    return target === "box" ? "/box" : "/";
   }
+  const host = window.location.hostname.toLowerCase();
+  const isProd = host === "koza.click" || host === "www.koza.click" || host === "box.koza.click";
+
+  if (isProd) {
+    return target === "box" ? "https://box.koza.click" : "https://koza.click";
+  }
+  return target === "box" ? "/box" : "/";
+}
+
+export function navigateToProduct(target: ProductMode) {
+  if (storeState.isSwitchingTo !== null) return;
+
+  const destination = getProductUrl(target);
+  const pathname = typeof window !== "undefined" ? window.location.pathname : "";
+  const host = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+
+  // Проверяем, находимся ли мы уже на целевом сервисе на главной
+  const isAlreadyOnBoxHome =
+    (host.startsWith("box.") || pathname === "/box") && pathname === (host.startsWith("box.") ? "/" : "/box");
+  const isAlreadyOnUrlHome =
+    !host.startsWith("box.") && pathname === "/";
+
+  if ((target === "box" && isAlreadyOnBoxHome) || (target === "url" && isAlreadyOnUrlHome)) {
+    return;
+  }
+
+  // Если пользователь находится на подстранице (/status, /docs, /policy и т.д.), сразу переходим
+  const isSubpage = pathname !== "/" && pathname !== "/box";
+  if (isSubpage) {
+    window.location.href = destination;
+    return;
+  }
+
+  // На главной включаем плавную анимацию скелетона в навбаре и на блоке, затем навигация
+  storeState = { isSwitchingTo: target };
+  emitChange();
+
+  window.setTimeout(() => {
+    window.location.href = destination;
+  }, 220);
 }
 
 export function switchTo(target: ProductMode) {
-  if (storeState.mode === target || storeState.isSwitchingTo !== null) return;
-
-  // 1. Включаем анимацию перехода и скелетон
-  storeState = { ...storeState, isSwitchingTo: target };
-  emitChange();
-
-  // 2. Через 260 мс мягко переключаем активный режим без единой перезагрузки страницы
-  window.setTimeout(() => {
-    storeState = { mode: target, isSwitchingTo: null };
-    emitChange();
-
-    try {
-      const newPath = target === "box" ? "/box" : "/";
-      if (window.location.pathname !== newPath) {
-        window.history.pushState(null, "", newPath);
-      }
-    } catch {
-      // игнорируем ошибку history если в sandbox
-    }
-  }, 260);
+  navigateToProduct(target);
 }
 
 export function wipeTo(path: string) {
   if (path.includes("box") || path.startsWith("/r/")) {
-    switchTo("box");
+    navigateToProduct("box");
   } else {
-    switchTo("url");
+    navigateToProduct("url");
   }
 }
 
-export function useProductState(): TransitionStore {
+export function useProductTransition(): ProductMode | null {
   return useSyncExternalStore(
     (onStoreChange) => {
       listeners.add(onStoreChange);
       return () => listeners.delete(onStoreChange);
     },
-    () => storeState,
-    () => storeState,
+    () => storeState.isSwitchingTo,
+    () => null,
   );
-}
-
-export function useSiteTransition(): ProductMode | null {
-  const st = useProductState();
-  return st.isSwitchingTo;
 }
 
 export function WipeLayer() {
