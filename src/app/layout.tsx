@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { WipeLayer } from "@/components/wipe";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,10 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="antialiased">
-        {children}
-        <WipeLayer />
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
