@@ -4,26 +4,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  AlertCircle,
   ArrowRight,
   Check,
   Download,
-  HardDriveDownload,
+  Fingerprint,
   KeyRound,
+  Lock,
   RotateCcw,
-  ShieldCheck,
   Timer,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { BoxFooter, BoxNav } from "./Sections";
 import {
   FileGlyph,
-  FingerprintBadge,
   KeepTabNote,
-  PeerAvatar,
   PeerSpin,
   ScanSweep,
   TransferPanel,
@@ -33,7 +29,6 @@ import { BoxReceiver, computeTransferFingerprint, saveBlob } from "./webrtc";
 import {
   fmtDuration,
   fmtSpeed,
-  pickPeer,
   prettySize,
   SpeedMeter,
 } from "./lib";
@@ -60,17 +55,12 @@ export function Receiver({ code }: { code: string }) {
   const [offer, setOffer] = useState<RoomOffer | null>(null);
   const [pw, setPw] = useState("");
   const [pwWrong, setPwWrong] = useState(false);
-  /* Track progress by file index (0, 1, 2...) instead of filename to avoid duplicate-name bugs */
   const [movedByIdx, setMovedByIdx] = useState<Record<number, number>>({});
   const [speed, setSpeed] = useState(0);
   const [eta, setEta] = useState(0);
   const [receivedFor, setReceivedFor] = useState(0);
   const [errorReason, setErrorReason] = useState("");
   const [received, setReceived] = useState<ReceivedFile[]>([]);
-
-  const [peer] = useState(() =>
-    typeof window === "undefined" ? { name: "sender", device: "Browser" } : pickPeer(),
-  );
 
   const engineRef = useRef<BoxReceiver | null>(null);
   const meterRef = useRef<SpeedMeter | null>(null);
@@ -104,7 +94,7 @@ export function Receiver({ code }: { code: string }) {
     return () => window.removeEventListener("beforeunload", guard);
   }, [stage]);
 
-  /* Fetch the live room from the backend — no fake demoOffer fallback */
+  /* Fetch the live room from the backend */
   const probeRoom = useCallback(() => {
     setStage("linking");
     setErrorReason("");
@@ -173,7 +163,7 @@ export function Receiver({ code }: { code: string }) {
     }
   };
 
-  /* Join the real transfer room via WebRTC + Parallel Turbo-WSS */
+  /* Join the real transfer room */
   const startReceive = useCallback(
     (password: string) => {
       if (!offer) return;
@@ -211,11 +201,13 @@ export function Receiver({ code }: { code: string }) {
               return;
             }
             stopClock();
-            setErrorReason("the sender disconnected before completion");
+            setErrorReason("the sender dropped — the line closed");
             setStage("error");
           }
         },
-        onChannelOpen: () => {},
+        onChannelOpen: () => {
+          t0.current = Date.now();
+        },
         onFileStart: (index) => {
           movedRef.current = { ...movedRef.current, [index]: movedRef.current[index] ?? 0 };
           setMovedByIdx({ ...movedRef.current });
@@ -246,13 +238,14 @@ export function Receiver({ code }: { code: string }) {
         },
         onAllDone: () => {
           stopClock();
+          setReceivedFor(Math.max(400, Date.now() - t0.current));
           setMovedByIdx({ ...movedRef.current });
           setStage("done");
           const eng = engineRef.current;
           engineRef.current = null;
           if (eng) window.setTimeout(() => eng.dispose(), 600);
-          toast.success("Transfer complete", {
-            description: "All files have been saved to your device.",
+          toast.success("Delivered", {
+            description: "The files have been saved to your device.",
           });
         },
         onError: (reason) => {
@@ -282,7 +275,7 @@ export function Receiver({ code }: { code: string }) {
   const downloadReceipt = () => {
     if (!offer) return;
     const lines = [
-      "koza box · verified transfer receipt",
+      "koza box · transfer receipt",
       `room: ${code.toUpperCase()}`,
       `fingerprint: ${offer.fingerprint}`,
       `received: ${offer.files.length} file(s) · ${prettySize(totalBytes)} in ${Math.max(1, Math.round(receivedFor / 1000))}s`,
@@ -320,412 +313,397 @@ export function Receiver({ code }: { code: string }) {
       <BoxNav />
 
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-        {/* Clean receiver header — replaces "incoming direct line · box.koza.click/r/..." */}
-        <div className="mb-4 flex flex-col items-center text-center">
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <Badge variant="coral">
-              <HardDriveDownload className="h-3 w-3" />
-              {stage === "receiving"
-                ? "Downloading your files"
-                : stage === "done"
-                  ? "Files received"
-                  : "Incoming file transfer"}
-            </Badge>
-            <Badge variant="secondary">Room {code.toUpperCase()}</Badge>
-            {offer?.fingerprint && <FingerprintBadge fingerprint={offer.fingerprint} />}
-          </div>
-          <h1 className="mt-3 text-2xl font-medium tracking-tight text-[var(--kz-mist)] sm:text-3xl">
-            {stage === "receiving"
-              ? "Receiving your files…"
-              : stage === "done"
-                ? "Download complete"
-                : stage === "not-found"
-                  ? "Room unavailable"
-                  : "Ready to receive files"}
-          </h1>
-        </div>
+        <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
+          {stage === "receiving" ? (
+            <>
+              Receiving{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                files
+              </span>
+              .
+            </>
+          ) : stage === "done" ? (
+            <>
+              Transfer{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                complete
+              </span>
+              .
+            </>
+          ) : stage === "not-found" || stage === "error" ? (
+            <>
+              Line{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                closed
+              </span>
+              .
+            </>
+          ) : (
+            <>
+              Ready to{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                receive
+              </span>
+              .
+            </>
+          )}
+        </h1>
 
-        <div className="w-full max-w-xl space-y-3">
-          {/* Separate shadcn Alert block for keep-tab-open warning */}
-          <AnimatePresence initial={false}>
-            {stage === "receiving" && (
-              <motion.div
-                key="keep-tab-alert"
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.22 }}
-              >
-                <KeepTabNote
-                  title="Transfer in progress"
-                  text="stay on this tab — the line closes with it"
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          className="kz-edge mt-7 w-full max-w-xl overflow-hidden"
+        >
+          {/* Stage strip — plain mono text, no noisy pill badges */}
+          <div className="flex items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
+            <span className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+              {stage === "linking" && "01 · opening line"}
+              {stage === "offer" && "02 · incoming files"}
+              {stage === "receiving" && "03 · receiving"}
+              {stage === "done" && "04 · delivered"}
+              {stage === "not-found" && "line closed"}
+              {stage === "error" && "line trouble"}
+            </span>
 
-          <motion.div
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            className="kz-edge w-full overflow-hidden"
-          >
-            {/* Stage header bar — no "direct udp" / "turbo stream" / "locked" */}
-            <div className="flex items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
-              <div className="flex items-center gap-2">
-                <Badge
-                  variant={
-                    stage === "error" || stage === "not-found"
-                      ? "destructive"
-                      : stage === "done"
-                        ? "emerald"
-                        : "coral"
-                  }
-                >
-                  {stage === "linking" && "01 · Connecting"}
-                  {stage === "offer" && "02 · Ready"}
-                  {stage === "receiving" && "03 · Downloading"}
-                  {stage === "done" && "04 · Saved"}
-                  {stage === "not-found" && "404 · Closed"}
-                  {stage === "error" && "Dropped"}
-                </Badge>
-                <span className="kz-mono text-[11px] text-[var(--kz-ash)]">
-                  {stage === "linking" && "locating transfer room"}
-                  {stage === "offer" &&
-                    offer &&
-                    `${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${prettySize(totalBytes)}`}
-                  {stage === "receiving" && "streaming directly to your browser"}
-                  {stage === "done" && "verified & saved"}
-                  {stage === "not-found" && "no active sender on this code"}
-                  {stage === "error" && "stream interrupted"}
+            <span className="flex items-center gap-3">
+              {stage === "offer" && offer && (
+                <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
+                  {offer.files.length} file{offer.files.length > 1 ? "s" : ""} ·{" "}
+                  {prettySize(totalBytes)}
                 </span>
-              </div>
-
-              {stage === "receiving" && (
-                <Badge variant="secondary">
-                  <Timer className="h-3 w-3" />
-                  {fmtDuration(receivedFor)}
-                </Badge>
               )}
-            </div>
+              {needsPw && stage === "offer" && (
+                <span className="kz-mono flex items-center gap-1 text-[11px] text-[var(--kz-coral)]">
+                  <Lock className="h-3 w-3" /> locked
+                </span>
+              )}
+              {offer?.fingerprint && (stage === "offer" || stage === "receiving") && (
+                <span
+                  className="kz-mono hidden items-center gap-1 text-[11px] text-[var(--kz-smoke)] sm:flex"
+                  title={`Session fingerprint: ${offer.fingerprint}`}
+                >
+                  <Fingerprint className="h-3 w-3 text-[var(--kz-coral)]" />
+                  {offer.fingerprint.slice(0, 9)}
+                </span>
+              )}
+              {stage === "receiving" && (
+                <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
+                  <Timer className="h-3.5 w-3.5" />
+                  {fmtDuration(receivedFor)}
+                </span>
+              )}
+            </span>
+          </div>
 
-            <div className="p-5 sm:p-6">
-              <AnimatePresence mode="wait" initial={false}>
-                {/* ── LINKING ─────────────────────────────────────── */}
-                {stage === "linking" && (
-                  <motion.div
-                    key="linking"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.28 }}
-                    className="flex flex-col items-center py-4 text-center"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <PeerSpin />
-                      <p className="text-[14px] font-medium text-[var(--kz-mist)]">
-                        Connecting to transfer line…
+          <div className="p-5 sm:p-6">
+            <AnimatePresence mode="wait" initial={false}>
+              {/* ── LINKING ─────────────────────────────────────── */}
+              {stage === "linking" && (
+                <motion.div
+                  key="linking"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.26 }}
+                  className="flex flex-col items-center py-3 text-center"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <PeerSpin />
+                    <p className="text-[14px] font-medium text-[var(--kz-mist)]">
+                      Opening the direct line
+                    </p>
+                  </div>
+                  <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
+                    handshake · punch-through · key exchange
+                  </p>
+                  <div className="mt-4">
+                    <ScanSweep />
+                  </div>
+                </motion.div>
+              )}
+
+              {/* ── NOT FOUND ───────────────────────────────────── */}
+              {stage === "not-found" && (
+                <motion.div
+                  key="not-found"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.26 }}
+                >
+                  <div className="kz-inset flex items-start gap-4 px-5 py-5">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[rgba(255,99,99,0.4)] bg-[rgba(255,99,99,0.08)]">
+                      <TriangleAlert className="h-5 w-5 text-[var(--kz-coral)]" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[15px] font-medium text-[var(--kz-mist)]">
+                        This line is closed or expired
+                      </p>
+                      <p className="kz-mono mt-1 text-[11px] text-[var(--kz-smoke)]">
+                        room {code.toUpperCase()} is no longer active
+                      </p>
+                      <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
+                        direct lines only stay open while the sender keeps their tab open
                       </p>
                     </div>
-                    <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
-                      checking room {code.toUpperCase()} · verifying fingerprint
-                    </p>
-                    <div className="mt-4">
-                      <ScanSweep />
-                    </div>
-                  </motion.div>
-                )}
+                  </div>
 
-                {/* ── NOT FOUND (honest 404 instead of fake demoOffer) ── */}
-                {stage === "not-found" && (
-                  <motion.div
-                    key="not-found"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.28 }}
-                  >
-                    <Alert variant="destructive">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertTitle>This transfer line is closed or expired</AlertTitle>
-                      <AlertDescription className="space-y-1.5 pt-1">
-                        <p className="kz-mono text-xs">
-                          Room <span className="font-semibold text-white">{code.toUpperCase()}</span>{" "}
-                          was not found on the server.
-                        </p>
-                        <p className="kz-mono text-[11px] text-red-200/70">
-                          Direct lines only exist while the sender keeps their tab open. Ask them for a fresh link or retry if they just opened it.
-                        </p>
-                      </AlertDescription>
-                    </Alert>
-
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <button
-                        onClick={() => probeRoom()}
-                        className="kz-neutral-btn flex h-11 cursor-pointer items-center justify-center gap-2 text-sm"
-                      >
-                        <RotateCcw className="h-4 w-4" /> Check again
-                      </button>
-                      <button
-                        onClick={() => wipeTo("/box")}
-                        className="kz-cta flex h-11 cursor-pointer items-center justify-center gap-2 text-sm"
-                      >
-                        Send files instead <ArrowRight className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* ── OFFER ───────────────────────────────────────── */}
-                {stage === "offer" && offer && (
-                  <motion.div
-                    key="offer"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.28 }}
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3.5">
-                        <PeerAvatar name={peer.name || "peer"} size={46} />
-                        <div className="min-w-0">
-                          <p className="text-[15px] font-medium text-[var(--kz-mist)]">
-                            Incoming payload ({offer.files.length} file
-                            {offer.files.length > 1 ? "s" : ""})
-                          </p>
-                          <p className="kz-mono mt-0.5 text-[11.5px] text-[var(--kz-smoke)]">
-                            {prettySize(totalBytes)} total · verified peer-to-peer stream
-                          </p>
-                        </div>
-                      </div>
-                      <Badge variant="emerald" className="hidden sm:inline-flex">
-                        <ShieldCheck className="h-3 w-3" /> Verified
-                      </Badge>
-                    </div>
-
-                    <ul
-                      className="kz-inset mt-4 divide-y divide-[var(--kz-hairline)]"
-                      aria-label="Incoming files"
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <button
+                      onClick={() => probeRoom()}
+                      className="kz-neutral-btn flex h-12 cursor-pointer items-center justify-center gap-2 text-sm"
                     >
-                      {offer.files.map((f, i) => (
-                        <li
-                          key={`${f.name}-${i}`}
-                          className="flex items-center gap-3 px-3.5 py-2.5"
-                        >
-                          <FileGlyph name={f.name} />
-                          <p className="kz-mono min-w-0 flex-1 truncate text-[13px] text-[var(--kz-mist)]">
-                            {f.name}
-                          </p>
-                          <Badge variant="secondary">{prettySize(f.size)}</Badge>
-                        </li>
-                      ))}
-                    </ul>
+                      <RotateCcw className="h-4 w-4" /> Try again
+                    </button>
+                    <button
+                      onClick={() => wipeTo("/box")}
+                      className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm"
+                    >
+                      Open box <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
 
-                    {needsPw ? (
-                      <motion.div
-                        animate={pwWrong ? { x: [0, -8, 8, -6, 6, -2, 0] } : { x: 0 }}
-                        transition={{ duration: 0.42 }}
-                        className="mt-4"
+              {/* ── OFFER (Clean file list + unified action bar) ── */}
+              {stage === "offer" && offer && (
+                <motion.div
+                  key="offer"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.26 }}
+                >
+                  <ul
+                    className="kz-inset divide-y divide-[var(--kz-hairline)]"
+                    aria-label="Incoming files"
+                  >
+                    {offer.files.map((f, i) => (
+                      <li
+                        key={`${f.name}-${i}`}
+                        className="flex items-center gap-3 px-3.5 py-3"
                       >
-                        <div
-                          className="kz-inset flex items-center gap-2.5 px-3.5 py-3"
-                          style={
-                            pwWrong
-                              ? {
-                                  boxShadow:
-                                    "inset 0 0 0 1px rgba(255,99,99,0.7), inset 0 1px 2px rgba(0,0,0,0.35)",
-                                }
-                              : undefined
-                          }
-                        >
-                          <KeyRound className="h-4 w-4 shrink-0 text-[var(--kz-coral)]" />
-                          <input
-                            value={pw}
-                            onChange={(e) => {
-                              setPw(e.target.value);
-                              setPwWrong(false);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && pw.trim()) startReceive(pw);
-                            }}
-                            type="password"
-                            placeholder="enter room password to download"
-                            aria-label="Room password"
-                            autoFocus
-                            autoComplete="off"
-                            className="kz-mono w-full min-w-0 bg-transparent text-[13px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
-                          />
-                          {pw && (
-                            <button
-                              onClick={() => setPw("")}
-                              className="kz-ghost-btn shrink-0 rounded-md p-1"
-                              aria-label="Clear password"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        {pwWrong && (
-                          <Alert variant="destructive" className="mt-3 py-2.5">
-                            <AlertCircle className="h-4 w-4" />
-                            <AlertTitle className="text-xs">Incorrect room password</AlertTitle>
-                            <AlertDescription className="text-[11px]">
-                              Ask the sender for the password and try again.
-                            </AlertDescription>
-                          </Alert>
+                        <FileGlyph name={f.name} />
+                        <p className="kz-mono min-w-0 flex-1 truncate text-[13px] text-[var(--kz-mist)]">
+                          {f.name}
+                        </p>
+                        <p className="kz-mono shrink-0 text-[11.5px] text-[var(--kz-smoke)]">
+                          {prettySize(f.size)}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {needsPw ? (
+                    <motion.div
+                      animate={pwWrong ? { x: [0, -8, 8, -6, 6, -2, 0] } : { x: 0 }}
+                      transition={{ duration: 0.42 }}
+                      className="mt-4"
+                    >
+                      {/* Unified password + download bar */}
+                      <div
+                        className="kz-inset flex items-center gap-2 p-1.5 pl-3.5"
+                        style={
+                          pwWrong
+                            ? {
+                                boxShadow:
+                                  "inset 0 0 0 1px rgba(255,99,99,0.7), inset 0 1px 2px rgba(0,0,0,0.35)",
+                              }
+                            : undefined
+                        }
+                      >
+                        <KeyRound className="h-4 w-4 shrink-0 text-[var(--kz-coral)]" />
+                        <input
+                          value={pw}
+                          onChange={(e) => {
+                            setPw(e.target.value);
+                            setPwWrong(false);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && pw.trim()) startReceive(pw);
+                          }}
+                          type="password"
+                          placeholder="Enter password…"
+                          aria-label="Room password"
+                          autoFocus
+                          autoComplete="off"
+                          className="kz-mono h-9 w-full min-w-0 flex-1 bg-transparent text-[13px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
+                        />
+                        {pw && (
+                          <button
+                            onClick={() => setPw("")}
+                            className="kz-ghost-btn shrink-0 rounded-md p-1"
+                            aria-label="Clear password"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         )}
                         <button
                           onClick={() => startReceive(pw)}
                           disabled={pw.trim().length === 0}
-                          className="kz-cta mt-3.5 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                          className="kz-cta flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-[9px] px-4 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          <Download className="h-4 w-4" /> Unlock & download files
+                          <Download className="h-3.5 w-3.5" />
+                          Download
                         </button>
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 0.1 }}
-                      >
-                        <button
-                          onClick={() => startReceive("")}
-                          className="kz-cta mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
-                        >
-                          <Download className="h-4 w-4" />
-                          Download {offer.files.length > 1 ? "all files" : "file"}
-                          <ArrowRight className="h-4 w-4" />
-                        </button>
-                      </motion.div>
-                    )}
-                  </motion.div>
-                )}
-
-                {/* ── RECEIVING ───────────────────────────────────── */}
-                {stage === "receiving" && offer && (
-                  <motion.div
-                    key="receiving"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.28 }}
-                  >
-                    <TransferPanel
-                      pct={overall}
-                      moved={totalMoved}
-                      total={totalBytes}
-                      bps={speed}
-                      etaMs={etaMs}
-                      files={offer.files.map((f, idx) => ({
-                        name: f.name,
-                        size: f.size,
-                        done: movedByIdx[idx] ?? 0,
-                      }))}
-                      doneLabel="saved"
-                      caption={`${doneCount}/${offer.files.length} saved`}
-                      fingerprint={offer.fingerprint}
-                    />
-                  </motion.div>
-                )}
-
-                {/* ── ERROR (clean shadcn Alert) ──────────────────── */}
-                {stage === "error" && (
-                  <motion.div
-                    key="error"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.28 }}
-                  >
-                    <Alert variant="destructive">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertTitle>Connection interrupted — the line dropped</AlertTitle>
-                      <AlertDescription className="space-y-1.5 pt-1">
-                        <p className="kz-mono text-xs text-red-200/90">
-                          {errorReason || "something interrupted the transfer stream"}
+                      </div>
+                      {pwWrong && (
+                        <p className="kz-mono mt-2 px-1 text-[11px] text-[var(--kz-coral)]">
+                          wrong password — try again
                         </p>
-                        <p className="kz-mono text-[11px] text-red-200/60">
-                          Ask the sender to keep their tab open or reopen the room.
-                        </p>
-                      </AlertDescription>
-                    </Alert>
+                      )}
+                    </motion.div>
+                  ) : (
                     <button
-                      onClick={() => probeRoom()}
-                      className="kz-neutral-btn mt-4 flex h-11 w-full cursor-pointer items-center justify-center gap-2 text-sm"
+                      onClick={() => startReceive("")}
+                      className="kz-cta mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
                     >
-                      <RotateCcw className="h-4 w-4" /> Reconnect to room
+                      <Download className="h-4 w-4" />
+                      Download {offer.files.length > 1 ? "files" : "file"}
+                      <ArrowRight className="h-4 w-4" />
                     </button>
-                  </motion.div>
-                )}
+                  )}
+                </motion.div>
+              )}
 
-                {/* ── DONE ────────────────────────────────────────── */}
-                {stage === "done" && offer && (
-                  <motion.div
-                    key="done"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <Alert variant="emerald">
-                      <Check className="h-4 w-4" />
-                      <AlertTitle className="flex flex-wrap items-center justify-between gap-2">
-                        <span>All files downloaded & verified</span>
-                        {offer.fingerprint && <FingerprintBadge fingerprint={offer.fingerprint} />}
-                      </AlertTitle>
-                      <AlertDescription className="kz-mono pt-1 text-xs">
-                        {offer.files.length} file{offer.files.length > 1 ? "s" : ""} ·{" "}
-                        {prettySize(totalBytes)} in {Math.max(1, Math.round(receivedFor / 1000))}s ·{" "}
-                        avg {fmtSpeed(totalBytes / Math.max(0.4, receivedFor / 1000))}
-                      </AlertDescription>
-                    </Alert>
+              {/* ── RECEIVING ───────────────────────────────────── */}
+              {stage === "receiving" && offer && (
+                <motion.div
+                  key="receiving"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.26 }}
+                >
+                  <TransferPanel
+                    pct={overall}
+                    moved={totalMoved}
+                    total={totalBytes}
+                    bps={speed}
+                    etaMs={etaMs}
+                    files={offer.files.map((f, idx) => ({
+                      name: f.name,
+                      size: f.size,
+                      done: movedByIdx[idx] ?? 0,
+                    }))}
+                    doneLabel="received"
+                    caption={`${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${doneCount} saved`}
+                  />
+                  <div className="mt-4 flex justify-center">
+                    <KeepTabNote text="stay on this tab — the line closes with it" />
+                  </div>
+                </motion.div>
+              )}
 
-                    {received.length > 0 && (
-                      <ul className="kz-inset mt-4 divide-y divide-[var(--kz-hairline)]">
-                        {received.map((f) => (
-                          <li
-                            key={`${f.index}-${f.name}`}
-                            className="flex items-center gap-3 px-3.5 py-2.5"
-                          >
-                            <FileGlyph name={f.name} />
-                            <div className="min-w-0 flex-1">
-                              <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
-                                {f.name}
-                              </p>
-                              <p className="kz-mono mt-0.5 text-[11px] text-[var(--kz-smoke)]">
-                                {prettySize(f.size)}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => saveBlob(f.blob, f.name)}
-                              className="kz-neutral-btn flex h-8 shrink-0 cursor-pointer items-center gap-1.5 px-3 text-xs"
-                              aria-label={`Save ${f.name} again`}
-                            >
-                              <Download className="h-3.5 w-3.5" /> Save again
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <button
-                        onClick={downloadReceipt}
-                        className="kz-neutral-btn flex h-11 cursor-pointer items-center justify-center gap-2 text-sm"
-                      >
-                        <Download className="h-4 w-4" /> Save receipt
-                      </button>
-                      <button
-                        onClick={() => wipeTo("/box")}
-                        className="kz-cta flex h-11 cursor-pointer items-center justify-center gap-2 text-sm"
-                      >
-                        Send files <ArrowRight className="h-4 w-4" />
-                      </button>
+              {/* ── ERROR ───────────────────────────────────────── */}
+              {stage === "error" && (
+                <motion.div
+                  key="error"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.26 }}
+                >
+                  <div className="kz-inset flex items-start gap-4 px-5 py-5">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[rgba(255,99,99,0.4)] bg-[rgba(255,99,99,0.08)]">
+                      <TriangleAlert className="h-5 w-5 text-[var(--kz-coral)]" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[15px] font-medium text-[var(--kz-mist)]">The line dropped</p>
+                      <p className="kz-mono mt-1 break-words text-[11px] text-[var(--kz-smoke)]">
+                        {errorReason || "something went wrong mid-flight"}
+                      </p>
+                      <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
+                        ask the sender to reopen the line — nothing was stored anywhere
+                      </p>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        </div>
+                  </div>
+                  <button
+                    onClick={() => probeRoom()}
+                    className="kz-neutral-btn mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
+                  >
+                    <RotateCcw className="h-4 w-4" /> Try the line again
+                  </button>
+                </motion.div>
+              )}
+
+              {/* ── DONE (Original clean Delivered layout) ──────── */}
+              {stage === "done" && offer && (
+                <motion.div
+                  key="done"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <div className="kz-inset flex items-center gap-4 px-5 py-5">
+                    <motion.div
+                      initial={{ scale: 0.3, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", stiffness: 380, damping: 18 }}
+                      className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[var(--kz-coral)]"
+                      aria-hidden="true"
+                    >
+                      <Check className="h-6 w-6 text-[#1a0b0b]" strokeWidth={3} />
+                    </motion.div>
+                    <div>
+                      <p className="text-lg font-medium text-[var(--kz-mist)]">Delivered</p>
+                      <p className="kz-mono mt-0.5 text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+                        {offer.files.length} file{offer.files.length > 1 ? "s" : ""} ·{" "}
+                        {prettySize(totalBytes)} · {Math.max(1, Math.round(receivedFor / 1000))}s ·{" "}
+                        {fmtSpeed(totalBytes / Math.max(0.4, receivedFor / 1000))}
+                      </p>
+                    </div>
+                  </div>
+
+                  {received.length > 0 && (
+                    <ul className="kz-inset mt-3 divide-y divide-[var(--kz-hairline)]">
+                      {received.map((f) => (
+                        <li
+                          key={`${f.index}-${f.name}`}
+                          className="flex items-center gap-3 px-3.5 py-2.5"
+                        >
+                          <FileGlyph name={f.name} />
+                          <div className="min-w-0 flex-1">
+                            <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
+                              {f.name}
+                            </p>
+                            <p className="kz-mono mt-0.5 text-[11px] text-[var(--kz-smoke)]">
+                              {prettySize(f.size)}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => saveBlob(f.blob, f.name)}
+                            className="kz-ghost-btn shrink-0 cursor-pointer self-center rounded-lg p-2"
+                            aria-label={`Save ${f.name} again`}
+                            title="Save again"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <button
+                      onClick={downloadReceipt}
+                      className="kz-neutral-btn flex h-12 cursor-pointer items-center justify-center gap-2 text-sm"
+                    >
+                      <Download className="h-4 w-4" /> Save receipt
+                    </button>
+                    <button
+                      onClick={() => wipeTo("/box")}
+                      className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm"
+                    >
+                      Open box <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.div>
       </main>
 
       <BoxFooter />

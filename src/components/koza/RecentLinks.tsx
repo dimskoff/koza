@@ -3,9 +3,8 @@
 
 import { useEffect, useSyncExternalStore, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Copy, ExternalLink, Lock, MousePointerClick, QrCode, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Lock, QrCode, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { KozaQr } from "./QrCode";
 import {
   type KozaLink,
@@ -18,6 +17,34 @@ import {
   syncClicks,
   timeAgo,
 } from "./lib";
+
+function FaviconAvatar({ url }: { url: string }) {
+  const host = hostOf(url);
+  const [failed, setFailed] = useState(false);
+  const letter = (host.charAt(0) || "?").toUpperCase();
+
+  return (
+    <span
+      className="kz-mono flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--kz-hairline)] bg-white/[0.04] text-sm uppercase text-[var(--kz-coral)]"
+      aria-hidden="true"
+    >
+      {!failed && host && host !== "link" ? (
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+          alt=""
+          width={18}
+          height={18}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          className="h-4 w-4 rounded-sm object-contain"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        letter
+      )}
+    </span>
+  );
+}
 
 export function RecentLinks() {
   const links = useSyncExternalStore(subscribeLinks, getLinksSnapshot, getServerLinks);
@@ -65,45 +92,28 @@ export function RecentLinks() {
 
   return (
     <section aria-label="Your links, local to this browser">
-      <div className="mb-2 flex items-center justify-between px-1">
-        <span className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
-          Recent links ({links.length})
-        </span>
-        <Badge variant="secondary">Saved locally</Badge>
-      </div>
-      <div className="kz-edge kz-scroll max-h-44 overflow-y-auto">
+      <div className="kz-edge kz-scroll max-h-36 overflow-y-auto sm:max-h-48">
         <ul className="divide-y divide-[var(--kz-hairline)]" aria-label="Saved short links">
           {links.map((link) => (
             <li
               key={link.id}
               className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.025]"
             >
-              <span
-                className="kz-mono flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--kz-hairline)] bg-white/[0.04] text-sm uppercase text-[var(--kz-coral)]"
-                aria-hidden="true"
-              >
-                {hostOf(link.url).charAt(0)}
-              </span>
+              <FaviconAvatar url={link.url} />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
-                    koza.click/<span className="text-[var(--kz-coral)]">{link.slug}</span>
+                    koza.click/<span className="text-[var(--kz-ash)]">{link.slug}</span>
                   </p>
                   {link.locked && (
-                    <Badge variant="coral" className="px-1.5 py-0 text-[10px]">
-                      <Lock className="h-2.5 w-2.5" /> locked
-                    </Badge>
+                    <Lock className="h-3 w-3 shrink-0 text-[var(--kz-coral)]" />
                   )}
                 </div>
                 <p className="kz-mono mt-0.5 truncate text-[11px] text-[var(--kz-smoke)]">
-                  {hostOf(link.url)} · {timeAgo(link.createdAt)}
+                  {hostOf(link.url)} · {timeAgo(link.createdAt)} · {link.clicks} clicks
                 </p>
               </div>
-              <Badge variant="secondary" className="hidden sm:inline-flex">
-                <MousePointerClick className="h-3 w-3 text-[var(--kz-coral)]" />
-                {link.clicks}
-              </Badge>
-              <div className="flex shrink-0 items-center gap-0.5 opacity-75 transition-opacity group-hover:opacity-100">
+              <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
                 <IconBtn
                   label="Copy short link"
                   onClick={() => copy(shortUrlOf(link.slug), "Link")}
@@ -155,7 +165,9 @@ export function RecentLinks() {
               className="kz-key w-full max-w-xs p-6"
               onClick={(e) => e.stopPropagation()}
             >
-              <Badge variant="secondary">Scan to open</Badge>
+              <p className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+                Scan to open
+              </p>
               <div className="mt-5 flex justify-center rounded-xl bg-[#0e0f11] p-5 ring-1 ring-white/10">
                 <KozaQr value={shortUrlOf(qrLink.slug)} size={196} />
               </div>

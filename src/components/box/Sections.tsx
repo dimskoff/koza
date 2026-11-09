@@ -43,10 +43,10 @@ export function BoxNav() {
           </a>
           <button
             onClick={() => wipeTo("/")}
-            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px]"
+            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1 px-3.5 text-[12px]"
             aria-label="Switch to koza.click"
           >
-            koza.click <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+            koza <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
           </button>
         </div>
       </div>
@@ -59,7 +59,9 @@ export function BoxFooter() {
   return (
     <footer className="kz-hairline-t">
       <div className="kz-mono mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
-        <p className="whitespace-nowrap">peer-to-peer · nothing stored · MPL-2.0</p>
+        <a href="/policy" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
+          policy <ArrowUpRight className="h-3 w-3" />
+        </a>
         <div className="flex items-center gap-1">
           <GithubLink />
           <a href="/status" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">

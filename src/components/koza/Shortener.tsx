@@ -10,7 +10,6 @@ import {
   Check,
   Copy,
   KeyRound,
-  Link2,
   Loader2,
   Lock,
   Plus,
@@ -19,7 +18,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { KozaQr } from "./QrCode";
 import {
   type KozaLink,
@@ -63,7 +61,7 @@ export function Shortener() {
     const normalized = normalizeUrl(destination);
     if (!normalized) {
       toast.error("That doesn't look like a URL", {
-        description: "Try something like claude.ai/chat",
+        description: "Try something like google.com",
       });
       return;
     }
@@ -135,17 +133,16 @@ export function Shortener() {
       setCopied(true);
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 2000);
-      toast.success("Link created & copied", {
+      toast.success("Link copied", {
         description: shortUrlOf(link.slug),
       });
     } catch {
-      toast.success("Link is live", {
+      toast.success("Link created", {
         description: shortUrlOf(link.slug),
       });
     }
   }, [phase, destination, slugTrimmed, baseError, taken, passwordOn, password]);
 
-  /* "Press / to focus" + Cmd/Ctrl+Enter */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -211,7 +208,7 @@ export function Shortener() {
       setCopied(true);
       if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1800);
-      toast.success("Short link copied");
+      toast.success("Link copied");
     } catch {
       toast.error("Clipboard unavailable");
     }
@@ -236,19 +233,18 @@ export function Shortener() {
           />
         )}
 
-        {/* ── Main bar: morphs smoothly between URL input and live short link ── */}
-        <div className="relative flex min-h-[58px] items-center gap-2 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4 transition-colors focus-within:bg-white/[0.04]">
+        {/* ── Main bar: morphs smoothly between URL input and short link ── */}
+        <div className="relative flex min-h-[56px] items-center gap-2 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4 transition-colors focus-within:bg-white/[0.04]">
           <AnimatePresence mode="wait" initial={false}>
             {!isDone ? (
               <motion.div
                 key="input-mode"
-                initial={{ opacity: 0, y: -12, filter: "blur(4px)" }}
+                initial={{ opacity: 0, y: -10, filter: "blur(4px)" }}
                 animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: -14, scale: 0.98, filter: "blur(4px)" }}
-                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                exit={{ opacity: 0, y: -12, scale: 0.98, filter: "blur(4px)" }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                 className="flex w-full items-center gap-2"
               >
-                <Link2 className="h-4 w-4 shrink-0 text-[var(--kz-smoke)]" aria-hidden="true" />
                 <input
                   ref={inputRef}
                   value={destination}
@@ -260,7 +256,7 @@ export function Shortener() {
                   inputMode="url"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="Paste a long URL — github.com/dimskoff/koza"
+                  placeholder="Paste a link..."
                   aria-label="Destination URL to shorten"
                   className="kz-mono h-10 w-full min-w-0 flex-1 bg-transparent text-[15px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
                 />
@@ -314,39 +310,32 @@ export function Shortener() {
             ) : (
               <motion.div
                 key="result-mode"
-                initial={{ opacity: 0, y: 14, scale: 0.98, filter: "blur(4px)" }}
+                initial={{ opacity: 0, y: 12, scale: 0.98, filter: "blur(4px)" }}
                 animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: 12, filter: "blur(4px)" }}
-                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                exit={{ opacity: 0, y: 10, filter: "blur(4px)" }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                 className="flex w-full items-center justify-between gap-2"
               >
                 {/* Clickable short link inside the input bar */}
                 <button
                   onClick={copyLink}
-                  className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
+                  className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                   title="Click to copy short link"
                 >
-                  <Badge variant="emerald" className="shrink-0">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    live
-                  </Badge>
                   {result.locked && (
-                    <Badge variant="coral" className="shrink-0">
-                      <Lock className="h-2.5 w-2.5" />
-                      locked
-                    </Badge>
+                    <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--kz-coral)]" />
                   )}
-                  <span className="kz-mono truncate text-[16px] font-medium tracking-tight sm:text-[17px]">
+                  <span className="kz-mono truncate text-[16px] font-medium tracking-tight">
                     <span className="text-[var(--kz-ash)]">koza.click/</span>
-                    <span className="text-[var(--kz-coral)] [text-shadow:0_0_20px_rgba(255,99,99,0.4)]">
+                    <span className="text-[var(--kz-coral)]">
                       {result.slug.split("").map((ch, i) => (
                         <motion.span
                           key={`${result.id}-${i}`}
                           className="inline-block"
-                          initial={{ y: 10, opacity: 0 }}
+                          initial={{ y: 8, opacity: 0 }}
                           animate={{ y: 0, opacity: 1 }}
                           transition={{
-                            delay: 0.04 + i * 0.025,
+                            delay: 0.03 + i * 0.02,
                             type: "spring",
                             stiffness: 480,
                             damping: 26,
@@ -359,11 +348,27 @@ export function Shortener() {
                   </span>
                 </button>
 
-                {/* Inline action controls right inside the input bar */}
-                <div className="flex shrink-0 items-center gap-1.5">
+                {/* Calm, clean inline actions */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={() => setQrOpen(true)}
+                    className="kz-ghost-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-[var(--kz-ash)] hover:bg-white/[0.06] hover:text-[var(--kz-mist)]"
+                    aria-label="Show QR code"
+                    title="QR code"
+                  >
+                    <QrCode className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={openResult}
+                    className="kz-ghost-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-[var(--kz-ash)] hover:bg-white/[0.06] hover:text-[var(--kz-mist)]"
+                    aria-label="Open short link"
+                    title="Open link"
+                  >
+                    <ArrowUpRight className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={copyLink}
-                    className="kz-cta flex h-9 cursor-pointer items-center gap-1.5 rounded-[9px] px-3.5 text-[12.5px]"
+                    className="kz-cta ml-1 flex h-9 cursor-pointer items-center gap-1.5 rounded-[9px] px-3.5 text-[12.5px]"
                     aria-live="polite"
                   >
                     {copied ? (
@@ -376,38 +381,13 @@ export function Shortener() {
                       </>
                     )}
                   </button>
-                  <button
-                    onClick={() => setQrOpen(true)}
-                    className="kz-neutral-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-[9px]"
-                    aria-label="Show QR code"
-                    title="QR code"
-                  >
-                    <QrCode className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={openResult}
-                    className="kz-neutral-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-[9px]"
-                    aria-label="Open short link"
-                    title="Open link"
-                  >
-                    <ArrowUpRight className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
-                  </button>
-                  <button
-                    onClick={reset}
-                    className="kz-ghost-btn flex h-9 cursor-pointer items-center gap-1 rounded-[9px] px-2.5 text-[12px] text-[var(--kz-ash)] hover:text-[var(--kz-mist)]"
-                    aria-label="Shorten another link"
-                    title="Shorten another link"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">New</span>
-                  </button>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Bottom bar inside the card: either Advanced options OR destination preview */}
+        {/* Bottom bar inside the card: Advanced options OR destination + New link */}
         <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
           {!isDone ? (
             <>
@@ -416,8 +396,8 @@ export function Shortener() {
                 aria-expanded={advancedOpen}
                 className="kz-mono flex cursor-pointer items-center gap-2 text-xs text-[var(--kz-ash)] transition-colors hover:text-[var(--kz-mist)]"
               >
-                <AtSign className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
-                Custom slug & password
+                <AtSign className="h-3.5 w-3.5" />
+                Advanced options
                 <span
                   className={`text-[10px] transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`}
                   aria-hidden="true"
@@ -426,11 +406,10 @@ export function Shortener() {
                 </span>
               </button>
               <span className="kz-mono hidden text-[11px] text-[var(--kz-smoke)] md:block">
-                press{" "}
                 <kbd className="rounded-md border border-[var(--kz-hairline)] bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[var(--kz-ash)]">
-                  /
+                  Enter ↵
                 </kbd>{" "}
-                to focus
+                to shorten
               </span>
             </>
           ) : (
@@ -440,14 +419,18 @@ export function Shortener() {
                 className="group flex min-w-0 items-center gap-2 text-left"
                 title="Open destination"
               >
-                <ArrowRight className="h-3.5 w-3.5 shrink-0 text-[var(--kz-coral)]" />
-                <span className="kz-mono truncate text-[11.5px] text-[var(--kz-ash)] group-hover:text-[var(--kz-mist)]">
+                <ArrowRight className="h-3.5 w-3.5 shrink-0 text-[var(--kz-smoke)] transition-colors group-hover:text-[var(--kz-coral)]" />
+                <span className="kz-mono truncate text-[12px] text-[var(--kz-smoke)] transition-colors group-hover:text-[var(--kz-ash)]">
                   {result.url}
                 </span>
               </button>
-              <span className="kz-mono hidden shrink-0 text-[11px] text-[var(--kz-smoke)] sm:inline">
-                302 edge redirect
-              </span>
+              <button
+                onClick={reset}
+                className="kz-mono flex shrink-0 cursor-pointer items-center gap-1 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:text-[var(--kz-mist)]"
+              >
+                <Plus className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
+                New link
+              </button>
             </div>
           )}
         </div>
@@ -572,7 +555,9 @@ export function Shortener() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <Badge variant="secondary">QR Code</Badge>
+                <p className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+                  Scan to open
+                </p>
                 <button
                   onClick={() => setQrOpen(false)}
                   className="kz-ghost-btn rounded-lg p-1.5"
