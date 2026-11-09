@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -6,16 +7,20 @@ import { useRouter, usePathname } from "next/navigation";
 import { BoxMark, CubeMark, LinkMark } from "./marks";
 
 /* Ask the shared veil to carry us to another koza site.
-   The veil covers the screen, the route swaps underneath,
-   then the veil lifts — one continuous beat, no white flash. */
+   The veil covers the screen, the route swaps underneath (or navigates cross-domain
+   between koza.click and box.koza.click in production), then lifts. */
 export function wipeTo(path: string) {
   window.dispatchEvent(new CustomEvent("kz:wipe", { detail: path }));
 }
 
-/* Where are we going? Pick the mark + the address to announce.
-   Literal colors only — the veil renders outside `.kz-root`. */
+function isProductionDomain(): boolean {
+  if (typeof window === "undefined") return false;
+  const h = window.location.hostname.toLowerCase();
+  return h === "koza.click" || h === "www.koza.click" || h === "box.koza.click";
+}
+
 function veilMeta(path: string): { mark: React.ReactNode; label: string } {
-  if (path.startsWith("/box")) {
+  if (path.startsWith("https://box.koza.click") || path.startsWith("/box")) {
     return { mark: <BoxMark size={30} />, label: "box.koza.click" };
   }
   if (path.startsWith("/r/")) {
@@ -24,15 +29,15 @@ function veilMeta(path: string): { mark: React.ReactNode; label: string } {
   if (path.startsWith("/docs")) {
     return { mark: <CubeMark size={26} />, label: "koza.click · api docs" };
   }
-  if (path === "/") {
+  if (path === "/" || path.startsWith("https://koza.click")) {
     return { mark: <LinkMark size={28} />, label: "koza.click" };
   }
   return { mark: <LinkMark size={28} />, label: `koza.click${path.toLowerCase()}` };
 }
 
-const COVER_MS = 230; // fade to black
-const LIFT_DELAY = 140; // let the new page paint while still covered
-const FAILSAFE_MS = 1100; // never stay stuck under the veil
+const COVER_MS = 230;
+const LIFT_DELAY = 140;
+const FAILSAFE_MS = 1100;
 
 const ASH = "#9c9c9d";
 const SMOKE = "#6a6b6c";
@@ -51,8 +56,18 @@ export function WipeLayer() {
 
   useEffect(() => {
     const onWipe = (e: Event) => {
-      const to = (e as CustomEvent<string>).detail;
+      let to = (e as CustomEvent<string>).detail;
       if (!to || target) return;
+
+      if (isProductionDomain()) {
+        const host = window.location.hostname.toLowerCase();
+        if (to === "/box" && host !== "box.koza.click") {
+          to = "https://box.koza.click";
+        } else if (to === "/" && host === "box.koza.click") {
+          to = "https://koza.click";
+        }
+      }
+
       if (to === pathname) {
         window.scrollTo({ top: 0, behavior: "smooth" });
         return;
@@ -67,7 +82,13 @@ export function WipeLayer() {
   /* covered → swap the route underneath */
   useEffect(() => {
     if (!veiled || !target) return;
-    const t = window.setTimeout(() => router.push(target), COVER_MS - 40);
+    const t = window.setTimeout(() => {
+      if (target.startsWith("http://") || target.startsWith("https://")) {
+        window.location.href = target;
+      } else {
+        router.push(target);
+      }
+    }, COVER_MS - 40);
     const failsafe = window.setTimeout(lift, FAILSAFE_MS);
     return () => {
       window.clearTimeout(t);

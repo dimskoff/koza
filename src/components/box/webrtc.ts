@@ -1,13 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
 /* ─────────────────────────────────────────────────────────────────────
    koza box — Hybrid Multi-Lane P2P + Parallel Turbo-WSS Transfer Engine (v2.2)
-
-   Why transfers previously stalled or ran at 200 KB/s:
-   1. Control frame collision: `{ type: "xfer", ...payload }` had `type: file.type`
-      inside `payload`, overwriting `type: "xfer"` with the file's MIME type
-      (e.g. "application/x-msdownload"). The receiver ignored the `start` frame
-      and dropped incoming binary chunks.
-   2. Single-TCP / TURN-TCP bottleneck: over VPNs, CGNAT, or high-RTT routes,
-      a single TCP stream or TURN-TCP SCTP tunnel is throttled to ~200–1000 KB/s.
 
    Architecture v2.2:
    • Dedicated Control Channel: Primary WebSocket (`this.ws`) carries ONLY
@@ -22,7 +15,8 @@
      arrives before the JSON `start` frame, reassembling bit-for-bit in order.
    • Non-Destructive Direct UDP Upgrade: Starts streaming via Turbo-WSS
      within ~200ms while WebRTC negotiates in parallel; upgrades to Direct UDP
-     (`host`/`srflx`/`prflx`) if a direct path opens, or closes TURN relay.
+     (`host`/`srflx`/`prflx`) if a direct path opens without re-triggering
+     `sendFiles()`.
    ───────────────────────────────────────────────────────────────────── */
 
 const STUN_FALLBACK: RTCIceServer[] = [
@@ -82,16 +76,44 @@ const BLOB_COMPACT_BYTES = 16 * 1024 * 1024; // Compact received chunks into Blo
 
 export type TransportMode = "p2p-udp" | "turbo-wss" | "connecting";
 
-/* Pack 12-byte header + payload into a single Uint8Array */
+/* Compute a deterministic transfer fingerprint (`XXXX·XXXX·XXXX·XXXX`)
+   from room code and staged files so both peers can verify the session */
+export function computeTransferFingerprint(
+  code: string,
+  files: { name: string; size: number }[],
+): string {
+  const payload = `${code.toUpperCase()}|${files.map((f) => `${f.name}:${f.size}`).join("|")}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  let h3 = 0x9e3779b9;
+  let h4 = 0x85ebca6b;
+  for (let i = 0; i < payload.length; i++) {
+    const c = payload.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ ((c << 3) | (c >>> 5)), 0x85ebca6b) >>> 0;
+    h3 = Math.imul(h3 ^ (c + i), 0xc2b2ae35) >>> 0;
+    h4 = Math.imul(h4 ^ (c * 31), 0x27d4eb2f) >>> 0;
+  }
+  const hex = (
+    (h1 >>> 16).toString(16).padStart(4, "0") +
+    (h2 >>> 16).toString(16).padStart(4, "0") +
+    (h3 >>> 16).toString(16).padStart(4, "0") +
+    (h4 >>> 16).toString(16).padStart(4, "0")
+  ).toUpperCase();
+  return `${hex.slice(0, 4)}·${hex.slice(4, 8)}·${hex.slice(8, 12)}·${hex.slice(12, 16)}`;
+}
+
+/* Pack 12-byte header + payload into a single Uint8Array<ArrayBuffer> */
 function packChunkFrame(
   fileIndex: number,
   chunkSeq: number,
   sourceBuf: ArrayBuffer,
   byteOffset: number,
   byteLength: number,
-): Uint8Array {
-  const frame = new Uint8Array(HEADER_BYTES + byteLength);
-  const view = new DataView(frame.buffer);
+): Uint8Array<ArrayBuffer> {
+  const ab = new ArrayBuffer(HEADER_BYTES + byteLength);
+  const frame = new Uint8Array(ab);
+  const view = new DataView(ab);
   view.setUint32(0, HEADER_MAGIC, true);
   view.setUint32(4, fileIndex, true);
   view.setUint32(8, chunkSeq, true);
@@ -195,6 +217,7 @@ export interface SenderEvents {
   onPeerJoined(): void;
   onPeerLeft(): void;
   onChannelOpen(mode: TransportMode): void;
+  onTransportChange?(mode: TransportMode): void;
   onProgress(queuedBytes: number): void;
   onFileQueued(index: number): void;
   onFileDone(index: number): void;
@@ -215,6 +238,7 @@ export class BoxSender {
   private candidateQueue: RTCIceCandidateInit[] = [];
   private makingOffer = false;
   private channelOpened = false;
+  private sendingInProgress = false;
   private mode: TransportMode = "connecting";
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private ackWaiters: Array<() => void> = [];
@@ -369,10 +393,11 @@ export class BoxSender {
   private activateTransport(chosen: TransportMode): void {
     if (this.disposed) return;
     if (this.channelOpened) {
-      /* If already streaming on turbo-wss and Direct UDP opens, upgrade seamlessly! */
+      /* If already streaming on turbo-wss and Direct UDP opens, upgrade the active mode
+         WITHOUT calling `onChannelOpen` a second time (which would start a duplicate `sendFiles()`). */
       if (chosen === "p2p-udp" && this.mode === "turbo-wss") {
         this.mode = "p2p-udp";
-        this.ev.onChannelOpen("p2p-udp");
+        this.ev.onTransportChange?.("p2p-udp");
       }
       return;
     }
@@ -388,7 +413,6 @@ export class BoxSender {
   private async startNegotiation(): Promise<void> {
     if (this.makingOffer || this.disposed) return;
     this.makingOffer = true;
-    this.channelOpened = false;
 
     /* Start streaming via Parallel Turbo-WSS after 250ms if Direct UDP hasn't opened yet,
        while allowing WebRTC to continue negotiating in the background for a Direct UDP upgrade! */
@@ -444,6 +468,7 @@ export class BoxSender {
             this.activateTransport("turbo-wss");
           } else if (this.mode === "p2p-udp") {
             this.mode = "turbo-wss";
+            this.ev.onTransportChange?.("turbo-wss");
           }
         }
       };
@@ -510,17 +535,18 @@ export class BoxSender {
     return sum;
   }
 
-  private sendBinaryChunk(chunk: Uint8Array): void {
+  private sendBinaryChunk(chunk: Uint8Array<ArrayBuffer>): void {
     if (
       this.mode === "p2p-udp" &&
       this.dc?.readyState === "open" &&
       this.dc.bufferedAmount < DC_BUFFER_HIGH
     ) {
       try {
-        this.dc.send(chunk as unknown as ArrayBufferView<ArrayBuffer>);
+        this.dc.send(chunk);
         return;
       } catch {
         this.mode = "turbo-wss";
+        this.ev.onTransportChange?.("turbo-wss");
       }
     }
     const lane = this.pickBestWsLane();
@@ -583,76 +609,93 @@ export class BoxSender {
 
   /* Stream all staged files across 6x Parallel Turbo-WSS lanes + Direct UDP */
   async sendFiles(files: File[]): Promise<void> {
+    if (this.sendingInProgress) return;
+    this.sendingInProgress = true;
     this.queued = 0;
     this.ackedBytes = 0;
     this.doneFiles.clear();
 
-    for (let i = 0; i < files.length; i++) {
-      if (this.disposed) throw new Error("transfer cancelled");
-      const file = files[i];
-
-      this.sendControl({
-        kind: "start",
-        i,
-        name: file.name,
-        size: file.size,
-        mimeType: file.type || "application/octet-stream",
-        transport: this.mode,
-      });
-      this.ev.onFileQueued(i);
-
-      let offset = 0;
-      let chunkSeq = 0;
-
-      while (offset < file.size) {
+    try {
+      for (let i = 0; i < files.length; i++) {
         if (this.disposed) throw new Error("transfer cancelled");
+        const file = files[i];
 
-        const blockEnd = Math.min(file.size, offset + READ_BLOCK_SIZE);
-        const blockBuf = await file.slice(offset, blockEnd).arrayBuffer();
+        this.sendControl({
+          kind: "start",
+          i,
+          name: file.name,
+          size: file.size,
+          mimeType: file.type || "application/octet-stream",
+          transport: this.mode,
+        });
+        this.ev.onFileQueued(i);
 
-        let blockOffset = 0;
-        while (blockOffset < blockBuf.byteLength) {
+        let offset = 0;
+        let chunkSeq = 0;
+
+        while (offset < file.size) {
           if (this.disposed) throw new Error("transfer cancelled");
 
-          await this.waitBackpressure();
+          const blockEnd = Math.min(file.size, offset + READ_BLOCK_SIZE);
+          const blockBuf = await file.slice(offset, blockEnd).arrayBuffer();
 
-          const chunkSize =
-            this.mode === "p2p-udp" && this.dc?.readyState === "open"
-              ? RTC_CHUNK_SIZE
-              : WSS_CHUNK_SIZE;
-          const sliceLen = Math.min(chunkSize, blockBuf.byteLength - blockOffset);
-          const frame = packChunkFrame(i, chunkSeq++, blockBuf, blockOffset, sliceLen);
+          let blockOffset = 0;
+          while (blockOffset < blockBuf.byteLength) {
+            if (this.disposed) throw new Error("transfer cancelled");
 
-          this.sendBinaryChunk(frame);
+            await this.waitBackpressure();
 
-          blockOffset += sliceLen;
-          this.queued += sliceLen;
-          this.reportCurrentProgress();
+            const chunkSize =
+              this.mode === "p2p-udp" && this.dc?.readyState === "open"
+                ? RTC_CHUNK_SIZE
+                : WSS_CHUNK_SIZE;
+            const sliceLen = Math.min(chunkSize, blockBuf.byteLength - blockOffset);
+            const frame = packChunkFrame(i, chunkSeq++, blockBuf, blockOffset, sliceLen);
+
+            this.sendBinaryChunk(frame);
+
+            blockOffset += sliceLen;
+            this.queued += sliceLen;
+            this.reportCurrentProgress();
+          }
+
+          offset = blockEnd;
         }
 
-        offset = blockEnd;
-      }
-
-      /* Wait until receiver confirms file `i` is reassembled (or socket buffers drain) */
-      if (file.size > 0 && !this.doneFiles.has(i)) {
-        await new Promise<void>((resolve) => {
-          const checkTimer = setInterval(() => {
-            this.reportCurrentProgress();
-            if (this.disposed || this.doneFiles.has(i)) {
+        /* Wait until receiver confirms file `i` is reassembled (including 0-byte files) */
+        if (!this.doneFiles.has(i)) {
+          await new Promise<void>((resolve) => {
+            const timeoutMs = file.size === 0 ? 1500 : 60_000;
+            const timeoutTimer = setTimeout(() => {
               clearInterval(checkTimer);
+              if (!this.doneFiles.has(i)) {
+                this.doneFiles.add(i);
+                this.ev.onFileDone(i);
+              }
               resolve();
-            }
-          }, 30);
-          this.fileDoneWaiters.set(i, () => {
-            clearInterval(checkTimer);
-            resolve();
+            }, timeoutMs);
+            const checkTimer = setInterval(() => {
+              this.reportCurrentProgress();
+              if (this.disposed || this.doneFiles.has(i)) {
+                clearInterval(checkTimer);
+                clearTimeout(timeoutTimer);
+                resolve();
+              }
+            }, 30);
+            this.fileDoneWaiters.set(i, () => {
+              clearInterval(checkTimer);
+              clearTimeout(timeoutTimer);
+              resolve();
+            });
           });
-        });
+        }
       }
-    }
 
-    if (!this.disposed) {
-      this.sendControl({ kind: "all-done" });
+      if (!this.disposed) {
+        this.sendControl({ kind: "all-done" });
+      }
+    } finally {
+      this.sendingInProgress = false;
     }
   }
 
@@ -684,6 +727,7 @@ export class BoxSender {
 
   dispose(): void {
     this.disposed = true;
+    this.sendingInProgress = false;
     if (this.fallbackTimer) {
       clearTimeout(this.fallbackTimer);
       this.fallbackTimer = null;

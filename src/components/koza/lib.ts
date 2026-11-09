@@ -1,10 +1,11 @@
-/* koza.click — client-side demo logic (no backend) */
+// SPDX-License-Identifier: MPL-2.0
+/* koza.click — client-side link store & validation */
 
 export interface KozaLink {
   id: string;
   slug: string;
   url: string;
-  password?: string;
+  locked?: boolean;
   clicks: number;
   createdAt: number;
 }
@@ -31,15 +32,27 @@ export const RESERVED_SLUGS = new Set([
   "privacy",
   "abuse",
   "report",
-  /* real routes on this deploy — never hand these out */
   "box",
   "r",
+  "room",
+  "signal",
+  "health",
+  "favicon.ico",
+  "robots.txt",
 ]);
 
-const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+const SLUG_ALPHABET = "abcdefghjkmnpqrstuvwxyz234567892";
 
 export function randomSlug(len = 6): string {
   let out = "";
+  const buf = new Uint8Array(len);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < len; i++) {
+      out += SLUG_ALPHABET[buf[i] & 31];
+    }
+    return out;
+  }
   for (let i = 0; i < len; i++) {
     out += SLUG_ALPHABET[Math.floor(Math.random() * SLUG_ALPHABET.length)];
   }
@@ -104,7 +117,8 @@ export function loadLinks(): KozaLink[] {
 }
 
 export function saveLink(link: KozaLink): KozaLink[] {
-  const links = [link, ...loadLinks()].slice(0, MAX_LINKS);
+  const existing = loadLinks().filter((l) => l.slug !== link.slug);
+  const links = [link, ...existing].slice(0, MAX_LINKS);
   persist(links);
   return links;
 }
@@ -120,9 +134,12 @@ export function bumpClicks(id: string): void {
   persist(links);
 }
 
-/* adopt the server's click count for a link (the truth lives server-side) */
+/* adopt the server's click count for a link (only dispatches if value actually changed) */
 export function syncClicks(id: string, clicks: number): void {
-  const links = loadLinks().map((l) => (l.id === id ? { ...l, clicks } : l));
+  const current = loadLinks();
+  const target = current.find((l) => l.id === id);
+  if (!target || target.clicks === clicks) return;
+  const links = current.map((l) => (l.id === id ? { ...l, clicks } : l));
   persist(links);
 }
 
@@ -131,7 +148,7 @@ function persist(links: KozaLink[]): void {
     window.localStorage.setItem(STORE_KEY, JSON.stringify(links));
     window.dispatchEvent(new CustomEvent("koza:links-updated"));
   } catch {
-    /* storage unavailable — demo continues in memory */
+    /* storage unavailable */
   }
 }
 

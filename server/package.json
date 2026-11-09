@@ -1,8 +1,10 @@
 {
   "name": "koza-server",
-  "version": "1.0.0",
+  "version": "2.2.0",
   "private": true,
   "description": "koza backend — shortener api, room registry and p2p signaling in one file",
+  "author": "dimskoff",
+  "license": "MPL-2.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

@@ -15,7 +15,7 @@ export async function GET(req: Request, { params }: Ctx) {
   if (!link) {
     return NextResponse.json({ error: "no such link" }, { status: 404 });
   }
-  return NextResponse.json({ link: publicLink(link) });
+  return NextResponse.json({ link: publicLink(link, false) });
 }
 
 /* DELETE /api/v1/links/{slug} — burn it. */

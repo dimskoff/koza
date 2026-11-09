@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # ─────────────────────────────────────────────────────────────────────
 # koza cli — talk to any koza server from the terminal.
 #
@@ -15,6 +16,17 @@ HOST="${KOZA_HOST:-https://koza.click}"
 API="$HOST/api/v1"
 AUTH=()
 [ -n "${KOZA_ADMIN_KEY:-}" ] && AUTH=(-H "x-koza-key: ${KOZA_ADMIN_KEY}")
+
+# Escape a string for safe inclusion inside JSON quotes
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
 
 usage() {
   cat <<EOF
@@ -42,9 +54,13 @@ case "$cmd" in
     url="${1:?usage: shorten <url> [slug] [password]}"
     slug="${2:-}"
     pw="${3:-}"
-    body="{\"url\": \"${url}\"}"
-    [ -n "$slug" ] && body="{\"url\": \"${url}\", \"slug\": \"${slug}\"}"
-    [ -n "$pw" ] && body="{\"url\": \"${url}\", \"slug\": \"${slug}\", \"password\": \"${pw}\"}"
+    e_url="$(json_escape "$url")"
+    e_slug="$(json_escape "$slug")"
+    e_pw="$(json_escape "$pw")"
+    body="{\"url\": \"${e_url}\""
+    [ -n "$slug" ] && body="${body}, \"slug\": \"${e_slug}\""
+    [ -n "$pw" ] && body="${body}, \"password\": \"${e_pw}\""
+    body="${body}}"
     curl -sS -X POST "${API}/shorten" -H 'content-type: application/json' -d "${body}"
     echo
     ;;
@@ -70,7 +86,8 @@ case "$cmd" in
   room)
     pw="${1:-}"
     if [ -n "$pw" ]; then
-      curl -sS -X POST "${API}/box/rooms" -H 'content-type: application/json' -d "{\"password\": \"${pw}\"}"
+      e_pw="$(json_escape "$pw")"
+      curl -sS -X POST "${API}/box/rooms" -H 'content-type: application/json' -d "{\"password\": \"${e_pw}\"}"
     else
       curl -sS -X POST "${API}/box/rooms" -H 'content-type: application/json' -d '{}'
     fi

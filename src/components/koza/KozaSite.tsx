@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { Zap, Shield, Globe } from "lucide-react";
 import { Toaster } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Shortener } from "./Shortener";
 import { RecentLinks } from "./RecentLinks";
 import { KozaFooter, KozaNav } from "./Sections";
@@ -26,6 +29,18 @@ export function KozaSite() {
       />
       <KozaNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
+        <div className="mb-4 flex flex-wrap items-center justify-center gap-2">
+          <Badge variant="coral">
+            <Zap className="h-3 w-3" /> Instant 302 Edge Redirects
+          </Badge>
+          <Badge variant="secondary">
+            <Shield className="h-3 w-3 text-emerald-400" /> Optional Scrypt Lock
+          </Badge>
+          <Badge variant="secondary">
+            <Globe className="h-3 w-3 text-sky-400" /> REST API + CLI
+          </Badge>
+        </div>
+
         <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           Short links,{" "}
           <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
@@ -33,14 +48,18 @@ export function KozaSite() {
           </span>
           .
         </h1>
-        <div className="mt-8 w-full max-w-2xl">
+        <p className="mt-2.5 max-w-md text-center text-sm text-[var(--kz-ash)]">
+          Paste any URL to mint a clean <span className="kz-mono text-[var(--kz-mist)]">koza.click</span> link right inside the bar.
+        </p>
+
+        <div className="mt-7 w-full max-w-2xl">
           <Shortener />
         </div>
         <div className="mt-5 w-full max-w-2xl">
           <RecentLinks />
         </div>
 
-        {/* open-source strip — the whole thing is on github, run your own */}
+        {/* open-source strip */}
         <a
           href={KOZA_REPO}
           target="_blank"
@@ -52,15 +71,15 @@ export function KozaSite() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-medium text-[var(--kz-mist)]">
-              open-source — read every line, run your own koza
+              open-source under MPL-2.0 — read every line, run your own koza
             </span>
             <span className="kz-mono mt-0.5 block truncate text-[11px] text-[var(--kz-smoke)]">
-              github.com/dimskoff/koza · one json file · docker compose up
+              github.com/dimskoff/koza · zero tracking · docker compose up
             </span>
           </span>
-          <span className="kz-mono hidden shrink-0 text-[11px] text-[var(--kz-smoke)] transition-colors group-hover:text-[var(--kz-coral)] sm:block">
+          <Badge variant="outline" className="hidden sm:inline-flex group-hover:border-[var(--kz-coral)]/40 group-hover:text-[var(--kz-coral)]">
             self-host →
-          </span>
+          </Badge>
         </a>
       </main>
       <KozaFooter />

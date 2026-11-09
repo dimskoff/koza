@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: MPL-2.0
 import os from "node:os";
 import { NextResponse } from "next/server";
-import { apiStore, publicLink, publicRoom } from "@/lib/api-store";
+import { apiStore, publicRoom } from "@/lib/api-store";
 import { proxyToBackend } from "@/lib/backend";
 
 export const dynamic = "force-dynamic";
@@ -16,13 +17,9 @@ export async function GET(req: Request) {
   const activeRooms = [...store.rooms.values()].map(publicRoom);
   const mem = process.memoryUsage();
 
-  const adminKey = process.env.KOZA_ADMIN_KEY || "";
-  const authHeader = req.headers.get("x-koza-key") || req.headers.get("x-koza-admin-key") || "";
-  const isAdmin = Boolean(!adminKey || (authHeader && authHeader === adminKey));
-
   return NextResponse.json({
     status: "operational",
-    version: "2.1.0",
+    version: "2.2.0",
     server_time: new Date().toISOString(),
     node_version: process.version,
     platform: `${process.platform}/${process.arch}`,
@@ -30,6 +27,7 @@ export async function GET(req: Request) {
     redirects: allLinks.length,
     total_clicks: totalClicks,
     rooms_count: activeRooms.length,
+    rooms: activeRooms.length,
     active_lines: 0,
     uptime_seconds: Math.floor(process.uptime()),
     memory_mb: Math.round(mem.rss / 1024 / 1024),
@@ -55,9 +53,5 @@ export async function GET(req: Request) {
       turn_ice: { ok: true, status: "stun-only", label: "STUN only" },
       storage: { ok: true, status: "operational", label: "Atomic link store · zero-disk file policy" },
     },
-    is_admin: isAdmin,
-    links: isAdmin ? allLinks.sort((a, b) => b.createdAt - a.createdAt).map(publicLink) : undefined,
-    rooms: isAdmin ? activeRooms : activeRooms.length,
-    admin_rooms: isAdmin ? activeRooms : undefined,
   });
 }

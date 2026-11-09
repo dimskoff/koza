@@ -1,4 +1,5 @@
-/* box.koza.click — client-side demo logic (no backend) */
+// SPDX-License-Identifier: MPL-2.0
+/* box.koza.click — client-side transfer helpers & metrics */
 
 export interface BoxFile {
   id: string;
@@ -20,10 +21,18 @@ export interface TransferSummary {
 const STORE_KEY = "box_transfers_v1";
 const MAX_RECORDS = 20;
 
-const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no lookalikes
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ234567892"; // 32 chars, no lookalikes
 
 export function roomCode(): string {
   let out = "";
+  const buf = new Uint8Array(6);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < 6; i++) {
+      out += CODE_ALPHABET[buf[i] & 31];
+    }
+    return out;
+  }
   for (let i = 0; i < 6; i++) {
     out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
   }
@@ -35,7 +44,7 @@ export function shortLinkOf(code: string): string {
 }
 
 export function roomLinkOf(code: string): string {
-  return `https://box.koza.click/room/${code}`;
+  return `https://box.koza.click/r/${code}`;
 }
 
 export function prettySize(bytes: number): string {
@@ -60,15 +69,23 @@ export function fmtSpeed(bytesPerSec: number): string {
   return `${(bytesPerSec / (1024 * mb)).toFixed(2)} GB/s`;
 }
 
-/* compact pair for metric cells: "5.1 / 60.0 MB" instead of "5.1 MB / 60.0 MB" */
+/* compact pair for metric cells: "5.1 / 60.0 MB" */
 export function prettyPair(moved: number, total: number): string {
   const mb = 1024 * 1024;
   let scale = 1;
   let digits = 0;
-  if (total >= 1024 * mb) { scale = 1024 * mb; digits = 2; }
-  else if (total >= mb) { scale = mb; digits = 1; }
-  else if (total >= 1024) { scale = 1024; digits = 1; }
-  const unit = scale === 1024 * mb ? " GB" : scale === mb ? " MB" : scale === 1024 ? " KB" : " B";
+  if (total >= 1024 * mb) {
+    scale = 1024 * mb;
+    digits = 2;
+  } else if (total >= mb) {
+    scale = mb;
+    digits = 1;
+  } else if (total >= 1024) {
+    scale = 1024;
+    digits = 1;
+  }
+  const unit =
+    scale === 1024 * mb ? " GB" : scale === mb ? " MB" : scale === 1024 ? " KB" : " B";
   return `${(moved / scale).toFixed(digits)} / ${(total / scale).toFixed(digits)}${unit}`;
 }
 
@@ -83,8 +100,7 @@ export function fmtEta(ms: number): string {
   return `${h}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-/* sliding-window throughput meter with a light ewma so the number
-   stops jumping around — 2.5s window, half-life ~800ms */
+/* sliding-window throughput meter with a light ewma */
 export class SpeedMeter {
   private samples: { t: number; bytes: number }[] = [];
   private smoothed = 0;
@@ -120,7 +136,6 @@ export class SpeedMeter {
   }
 }
 
-/* Simulated peers for the demo room */
 export const PEER_NAMES = ["atlas", "vireo", "nomad", "kestrel", "lumen", "sable"];
 
 export function pickPeer(): { name: string; device: string } {
@@ -130,7 +145,6 @@ export function pickPeer(): { name: string; device: string } {
   return { name, device };
 }
 
-/* File-type chip color bucket — used by the file list */
 export function fileCategory(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "avif"].includes(ext)) return "image";
@@ -163,7 +177,6 @@ export function saveTransfer(summary: TransferSummary): void {
   window.dispatchEvent(new CustomEvent("box:transfers-updated"));
 }
 
-/* useSyncExternalStore wiring for the local transfer history */
 const EMPTY_TRANSFERS: TransferSummary[] = [];
 let cachedJson: string | null | undefined = undefined;
 let cachedTransfers: TransferSummary[] = EMPTY_TRANSFERS;
@@ -204,55 +217,4 @@ export function timeAgo(ts: number): string {
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
-}
-
-/* ── outgoing offers: what the receiver page at /r/<code> should show ──
-   Pure-frontend demo: the sender stages the payload in localStorage under
-   the room code; the receiver tab picks it up. Demo only — never sent
-   anywhere. Password is stored as a tiny non-crypto digest. */
-
-export interface TransferOffer {
-  files: { name: string; size: number }[];
-  passwordHash: string | null;
-  encrypted: boolean;
-  createdAt: number;
-}
-
-const OFFER_PREFIX = "box_offer_";
-const OFFER_TTL_MS = 60 * 60 * 1000;
-
-export function hashPass(pw: string): string {
-  let h = 5381;
-  for (let i = 0; i < pw.length; i++) h = ((h << 5) + h + pw.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(16);
-}
-
-export function saveOffer(code: string, offer: TransferOffer): void {
-  try {
-    window.localStorage.setItem(OFFER_PREFIX + code, JSON.stringify(offer));
-  } catch {
-    /* ignore */
-  }
-}
-
-/* Mirror the staged offer to the koza api so the room resolves in
-   other browsers too (fire-and-forget — the local demo keeps working
-   even if the request dies). Kept for the /r/<code> demo fallback;
-   the real sender opens rooms via POST /api/v1/box/rooms instead. */
-export function publishOffer(): void {
-  /* no-op since the real p2p flow — rooms are created server-side */
-}
-
-export function loadOffer(code: string): TransferOffer | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(OFFER_PREFIX + code);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as TransferOffer;
-    if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) return null;
-    if (Date.now() - parsed.createdAt > OFFER_TTL_MS) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
 }

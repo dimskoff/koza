@@ -1,11 +1,6 @@
-/* Thin bridge between the Next.js api routes and the koza backend
-   (server/server.js — persistent json storage + signaling).
-
-   Set KOZA_API_URL in production (e.g. http://koza-api:8787 on the
-   dokploy overlay network) and every /api/v1 handler below becomes a
-   pass-through: links survive restarts, rooms live in the same process
-   as the websocket signaling.  With no KOZA_API_URL (local dev) the
-   routes fall back to the in-memory demo store in api-store.ts. */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 import { NextResponse } from "next/server";
 
@@ -18,10 +13,14 @@ export async function proxyToBackend(
   if (!UPSTREAM) return null;
 
   const headers = new Headers();
-  /* forward the auth headers the backend checks — without these the
-     sender can't close its own line (DELETE x-koza-token) and admin
-     key calls (x-koza-key) would all bounce with 401 */
-  for (const name of ["x-koza-token", "x-koza-key", "authorization"]) {
+  for (const name of [
+    "x-koza-token",
+    "x-koza-key",
+    "x-koza-admin-key",
+    "x-koza-password",
+    "authorization",
+    "x-forwarded-for",
+  ]) {
     const v = req.headers.get(name);
     if (v) headers.set(name, v);
   }

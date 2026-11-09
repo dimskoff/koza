@@ -3,6 +3,7 @@ import {
   apiHashPass,
   apiStore,
   codeTaken,
+  computeRoomFingerprint,
   pruneRooms,
   publicRoom,
   randomApiCode,
@@ -77,12 +78,14 @@ export async function POST(req: Request) {
   } while (codeTaken(code));
 
   const senderToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  const createdAt = Date.now();
   const room = {
     code,
     senderToken,
     passwordHash: hash,
     files: staged,
-    createdAt: Date.now(),
+    fingerprint: computeRoomFingerprint(code, staged, createdAt),
+    createdAt,
   };
   store.rooms.set(code, room);
 

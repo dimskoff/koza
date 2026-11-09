@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 import { NextResponse } from "next/server";
 import {
   apiHashPass,
@@ -82,5 +83,5 @@ export async function POST(req: Request) {
   };
   store.links.set(finalSlug, link);
 
-  return NextResponse.json({ link: publicLink(link) }, { status: 201 });
+  return NextResponse.json({ link: publicLink(link, true) }, { status: 201 });
 }

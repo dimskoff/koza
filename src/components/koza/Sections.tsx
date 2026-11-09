@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 "use client";
 
 import { ArrowUpRight } from "lucide-react";
@@ -19,7 +20,7 @@ export function KozaNav() {
         <div className="flex items-center gap-2">
           <a
             href="/status"
-            className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-ash)] hover:text-[var(--kz-mist)] transition-colors sm:flex"
+            className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-ash)] hover:text-[var(--kz-mist)] transition-colors sm:flex px-2 py-1 rounded-full hover:bg-white/[0.04]"
             aria-label="System status & telemetry"
           >
             <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
@@ -30,10 +31,10 @@ export function KozaNav() {
           </a>
           <button
             onClick={() => wipeTo("/box")}
-            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1 px-3.5 text-[12px]"
+            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px]"
             aria-label="Switch to box.koza.click"
           >
-            box <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+            box.koza.click <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
           </button>
         </div>
       </div>
@@ -46,7 +47,7 @@ export function KozaFooter() {
   return (
     <footer className="kz-hairline-t">
       <div className="kz-mono mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
-        <p className="whitespace-nowrap">no account · no tracking</p>
+        <p className="whitespace-nowrap">no account · no tracking · MPL-2.0</p>
         <div className="flex items-center gap-1">
           <GithubLink />
           <a href="/status" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">

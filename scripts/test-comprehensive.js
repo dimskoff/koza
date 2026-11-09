@@ -286,13 +286,47 @@ function wsOpen(url, onBinary) {
   ok("HTTP cut-through stream POST & GET succeeded", postJson.ok === true && getStatusCode === 200);
   ok("HTTP cut-through stream SHA-256 integrity verified", streamSrcHash === streamDstHash);
 
-  console.log("\n── Test 6: Upgraded Telemetry /api/v1/stats v2.1 ──");
+  console.log("\n── Test 6: Upgraded Telemetry /api/v1/stats v2.2 ──");
   const statsRes = await fetch(`${HTTP}/api/v1/stats`);
   const statsData = await statsRes.json();
-  ok("Stats v2.1 returns operational status & version", statsData.status === "operational" && statsData.version === "2.1.0");
-  ok("Stats v2.1 tracks total_bytes_relayed (>65 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
-  ok("Stats v2.1 includes services health matrix", statsData.services?.turbo_relay?.ok === true);
-  ok("Stats v2.1 returns redirects & rooms_count numbers", typeof statsData.redirects === "number" && typeof statsData.rooms_count === "number");
+  ok("Stats v2.2 returns operational status & version", statsData.status === "operational" && statsData.version === "2.2.0");
+  ok("Stats v2.2 tracks total_bytes_relayed (>65 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
+  ok("Stats v2.2 includes services health matrix", statsData.services?.turbo_relay?.ok === true);
+  ok("Stats v2.2 returns redirects & rooms_count numbers", typeof statsData.redirects === "number" && typeof statsData.rooms_count === "number");
+  ok("Stats v2.2 does not expose admin dumps", statsData.links === undefined && statsData.admin_rooms === undefined);
+
+  console.log("\n── Test 6b: Security Fixes (Locked Link Masking, Direct 302 Block, Room Fingerprint) ──");
+  const lockedCreate = await fetch(`${HTTP}/api/v1/shorten`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "secret.example.com/vault", password: "supersecretpassword" }),
+  });
+  const lockedJson = await lockedCreate.json();
+  const lockedSlug = lockedJson.link?.slug;
+  ok("Shortener auto-prepends https:// and returns URL on creation", lockedJson.link?.url === "https://secret.example.com/vault" && lockedJson.link?.password === true);
+
+  const lockedInspect = await fetch(`${HTTP}/api/v1/links/${lockedSlug}`);
+  const inspectJson = await lockedInspect.json();
+  ok("GET /api/v1/links/:slug masks url as null when password-protected", inspectJson.link?.url === null && inspectJson.link?.password === true);
+
+  const directGet = await fetch(`${HTTP}/${lockedSlug}`, { redirect: "manual" });
+  ok("Direct GET /:slug blocks 302 redirect on password-protected link (403)", directGet.status === 403);
+
+  const wrongUnlock = await fetch(`${HTTP}/api/v1/links/${lockedSlug}/unlock`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: "wrong" }),
+  });
+  ok("POST /unlock rejects wrong password with 403", wrongUnlock.status === 403);
+
+  const rightUnlock = await fetch(`${HTTP}/api/v1/links/${lockedSlug}/unlock`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: "supersecretpassword" }),
+  });
+  const rightJson = await rightUnlock.json();
+  ok("POST /unlock returns destination URL with right password", rightJson.url === "https://secret.example.com/vault");
+  ok("Room creation includes cryptographic fingerprint & omits password_hash", typeof data1.room?.fingerprint === "string" && data1.room.fingerprint.length === 19 && data1.room.password_hash === undefined);
 
   console.log("\n── Test 7: 6x Parallel Turbo Lanes + 12-byte KOZA Header + Out-of-Order Reassembly ──");
   const r7 = await fetch(`${HTTP}/api/v1/box/rooms`, {

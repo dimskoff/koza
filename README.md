@@ -5,7 +5,7 @@
 **Modern, privacy-first URL shortener and peer-to-peer file transfer engine.**  
 *Anonymous, end-to-end encrypted, zero logs, zero database bloat.*
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](./LICENSE)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](./LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-15%2B-black?logo=next.js)](https://nextjs.org/)
 [![WebRTC](https://img.shields.io/badge/WebRTC-E2E%20Encrypted-blue?logo=webrtc)](https://webrtc.org/)
 [![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docker.com)
@@ -193,5 +193,5 @@ curl -X POST https://koza.click/api/v1/box/rooms \
 
 ## 📄 License
 
-Distributed under the [MIT License](./LICENSE).  
+Distributed under the [Mozilla Public License Version 2.0 (MPL-2.0)](./LICENSE).  
 Maintained by [dimskoff](https://github.com/dimskoff).

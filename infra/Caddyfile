@@ -1,31 +1,25 @@
 # ─────────────────────────────────────────────────────────────────────
-# koza · automatic https reverse proxy
+# koza · automatic https reverse proxy (Caddy 2)
 #
-# 1. point the domain's A record at this box
-# 2. set KOZA_DOMAIN in .env
+# 1. point your domains' A records at this box
+# 2. set KOZA_HOST and KOZA_BOX_HOST in .env
 # 3. docker compose --profile proxy up -d
-#
-# caddy obtains and renews certificates on its own.
 # ─────────────────────────────────────────────────────────────────────
 
-{$KOZA_DOMAIN} {
+{$KOZA_HOST:koza.click}, {$KOZA_BOX_HOST:box.koza.click} {
 	# websocket signaling — long-lived, no buffering
 	handle /signal* {
-		reverse_proxy koza:8787
+		reverse_proxy api:8787
 	}
 
 	# the api
 	handle /api/* {
-		reverse_proxy koza:8787
+		reverse_proxy api:8787
 	}
 
-	# everything else: short links resolve here (302 from the server),
-	# unknown paths get a json 404 from the server too
+	# next.js frontend + short link resolution
 	handle {
-		reverse_proxy koza:8787
-		# want the website served from this box as well? run the web
-		# container and point the final handle at it instead:
-		# reverse_proxy web:3000
+		reverse_proxy web:3000
 	}
 
 	encode gzip

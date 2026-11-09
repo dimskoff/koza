@@ -1,11 +1,13 @@
+// SPDX-License-Identifier: MPL-2.0
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, KeyRound, Lock } from "lucide-react";
+import { AlertCircle, ArrowRight, KeyRound, Lock, ShieldCheck } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { KozaFooter, KozaNav } from "./Sections";
 import {
-  type KozaLink,
   bumpClicks,
   getLinksSnapshot,
   getServerLinks,
@@ -15,14 +17,11 @@ import {
 
 type GateState = "loading" | "missing" | "locked" | "jump" | "unlocked";
 
-/* server-side resolution: links minted through the koza api live on the
-   server, so the gate asks once when the browser store comes up empty */
 type ServerProbe =
   | { status: "checking" }
   | { status: "none" }
-  | { status: "found"; url: string; password: boolean };
+  | { status: "found"; url: string | null; password: boolean };
 
-/* after a correct password: one short success beat, then go */
 const UNLOCK_BEAT_MS = 650;
 const emptySubscribe = () => () => {};
 
@@ -31,7 +30,8 @@ export function LinkGate({ slug }: { slug: string }) {
   const links = useSyncExternalStore(subscribeLinks, getLinksSnapshot, getServerLinks);
   const [pw, setPw] = useState("");
   const [pwWrong, setPwWrong] = useState(false);
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockedUrl, setUnlockedUrl] = useState<string | null>(null);
   const [server, setServer] = useState<ServerProbe>({ status: "checking" });
   const probed = useRef(false);
 
@@ -40,9 +40,9 @@ export function LinkGate({ slug }: { slug: string }) {
     [links, slug],
   );
 
-  /* one shot: ask the api about this slug if the browser doesn't know it */
+  /* Probe the server for this slug so locked status & URL come from the authoritative backend */
   useEffect(() => {
-    if (!mounted || link || probed.current) return;
+    if (!mounted || probed.current) return;
     probed.current = true;
     let alive = true;
     fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}`)
@@ -50,15 +50,21 @@ export function LinkGate({ slug }: { slug: string }) {
       .then(
         (
           data: {
-            link?: { url?: string; password?: boolean };
+            link?: { url?: string | null; password?: boolean };
           } | null,
         ) => {
           if (!alive) return;
-          if (data?.link?.url) {
+          if (data?.link) {
             setServer({
               status: "found",
-              url: data.link.url,
+              url: data.link.url ?? null,
               password: Boolean(data.link.password),
+            });
+          } else if (link && !link.locked) {
+            setServer({
+              status: "found",
+              url: link.url,
+              password: false,
             });
           } else {
             setServer({ status: "none" });
@@ -66,7 +72,13 @@ export function LinkGate({ slug }: { slug: string }) {
         },
       )
       .catch(() => {
-        if (alive) setServer({ status: "none" });
+        if (alive) {
+          if (link && !link.locked) {
+            setServer({ status: "found", url: link.url, password: false });
+          } else {
+            setServer({ status: "none" });
+          }
+        }
       });
     return () => {
       alive = false;
@@ -74,44 +86,35 @@ export function LinkGate({ slug }: { slug: string }) {
   }, [mounted, link, slug]);
 
   const serverLink = server.status === "found" ? server : null;
+  const hasPw = Boolean(serverLink?.password || link?.locked);
 
   const state: GateState = !mounted
     ? "loading"
-    : link
-      ? link.password
-        ? unlocked
-          ? "unlocked"
-          : "locked"
-        : "jump"
-      : serverLink
-        ? serverLink.password
-          ? unlocked
+    : server.status === "checking"
+      ? "loading"
+      : server.status === "none"
+        ? "missing"
+        : hasPw
+          ? unlockedUrl
             ? "unlocked"
             : "locked"
-          : "jump"
-        : server.status === "none"
-          ? "missing"
-          : "loading";
+          : "jump";
 
-  const target = link?.url ?? serverLink?.url ?? null;
+  const target = unlockedUrl ?? serverLink?.url ?? link?.url ?? null;
   const linkId = link?.id;
-  const hasPw = Boolean(link?.password) || Boolean(serverLink?.password);
 
-  /* no password → zero ceremony: count the click and replace immediately.
-     with password → the gate already let them in, one beat and go. */
   useEffect(() => {
     if ((state !== "jump" && state !== "unlocked") || !target) return;
     if (linkId) {
       bumpClicks(linkId);
     }
-    /* count the click on the server too — best effort, both paths */
     try {
       void fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}/hit`, {
         method: "POST",
         keepalive: true,
       });
     } catch {
-      /* counting is best-effort */
+      /* best-effort */
     }
     if (!hasPw) {
       window.location.replace(target);
@@ -122,32 +125,26 @@ export function LinkGate({ slug }: { slug: string }) {
   }, [state, target, linkId, hasPw, slug]);
 
   const unlock = () => {
-    if (link?.password) {
-      if (pw === link.password) {
-        setPwWrong(false);
-        setUnlocked(true);
-      } else {
+    if (!pw.trim() || unlocking) return;
+    setUnlocking(true);
+    fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}/unlock`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: pw }),
+    })
+      .then(async (r) => {
+        if (r.status === 200) {
+          const d = (await r.json()) as { url?: string };
+          if (d.url) {
+            setPwWrong(false);
+            setUnlockedUrl(d.url);
+            return;
+          }
+        }
         setPwWrong(true);
-      }
-      return;
-    }
-    if (serverLink?.password) {
-      fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}/unlock`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password: pw }),
       })
-        .then((r) =>
-          r.status === 200
-            ? r.json().then((d: { url?: string }) => {
-                if (d.url) setServer({ status: "found", url: d.url, password: true });
-                setPwWrong(false);
-                setUnlocked(true);
-              })
-            : setPwWrong(true),
-        )
-        .catch(() => setPwWrong(true));
-    }
+      .catch(() => setPwWrong(true))
+      .finally(() => setUnlocking(false));
   };
 
   return (
@@ -164,9 +161,7 @@ export function LinkGate({ slug }: { slug: string }) {
               exit={{ opacity: 0 }}
               className="flex flex-col items-center gap-4"
             >
-              <span className="kz-mono text-[12px] uppercase tracking-wider text-[var(--kz-smoke)]">
-                resolving…
-              </span>
+              <Badge variant="secondary">resolving link…</Badge>
               <span className="h-1 w-40 overflow-hidden rounded-full bg-white/[0.07]">
                 <span className="kz-fill block h-full w-full rounded-full bg-[var(--kz-coral)]" />
               </span>
@@ -187,20 +182,22 @@ export function LinkGate({ slug }: { slug: string }) {
                 initial={{ scale: 0.4, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: "spring", stiffness: 420, damping: 20 }}
-                className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--kz-coral)] shadow-[0_0_28px_rgba(255,99,99,0.4)]"
+                className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 shadow-[0_0_28px_rgba(16,185,129,0.3)]"
                 aria-hidden="true"
               >
-                <UnlockIcon />
+                <ShieldCheck className="h-6 w-6" />
               </motion.div>
-              <p className="mt-4 text-[16px] font-medium text-[var(--kz-mist)]">Unlocked</p>
-              <p className="kz-mono mt-1 truncate text-[13px] text-[var(--kz-ash)]">
+              <div className="mt-4 flex justify-center">
+                <Badge variant="emerald">Unlocked · Redirecting</Badge>
+              </div>
+              <p className="kz-mono mt-3 truncate text-[13px] text-[var(--kz-ash)]">
                 <span className="text-[var(--kz-smoke)]">koza.click/</span>
-                <span className="text-[var(--kz-coral)]">{slug.toLowerCase()}</span> ·{" "}
+                <span className="text-[var(--kz-coral)]">{slug.toLowerCase()}</span> →{" "}
                 {hostOf(target)}
               </p>
               <span className="mt-5 block h-1 w-full overflow-hidden rounded-full bg-white/[0.07]">
                 <span
-                  className="kz-fill block h-full w-full rounded-full bg-[var(--kz-coral)] shadow-[0_0_10px_rgba(255,99,99,0.5)]"
+                  className="kz-fill block h-full w-full rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]"
                   style={{ animationDuration: `${UNLOCK_BEAT_MS}ms` }}
                 />
               </span>
@@ -224,12 +221,15 @@ export function LinkGate({ slug }: { slug: string }) {
                 >
                   <Lock className="h-5 w-5 text-[var(--kz-coral)]" />
                 </span>
-                <p className="mt-4 text-[16px] font-medium text-[var(--kz-mist)]">
-                  This link is locked
+                <Badge variant="coral" className="mt-4">
+                  Password Protected
+                </Badge>
+                <p className="mt-2.5 text-[17px] font-medium text-[var(--kz-mist)]">
+                  This short link is locked
                 </p>
                 <p className="kz-mono mt-1 text-[12px] text-[var(--kz-smoke)]">
                   koza.click/<span className="text-[var(--kz-coral)]">{slug.toLowerCase()}</span>{" "}
-                  asks for a password
+                  requires a password to unlock
                 </p>
               </div>
 
@@ -269,21 +269,26 @@ export function LinkGate({ slug }: { slug: string }) {
                   />
                 </div>
                 {pwWrong && (
-                  <p className="kz-mono mt-2 text-[11px] text-[var(--kz-coral)]">
-                    wrong password — try again
-                  </p>
+                  <Alert variant="destructive" className="mt-3 py-2.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle className="text-xs">Incorrect password</AlertTitle>
+                    <AlertDescription className="text-[11px]">
+                      Please check the password and try again.
+                    </AlertDescription>
+                  </Alert>
                 )}
                 <button
                   onClick={unlock}
-                  disabled={pw.length === 0}
-                  className="kz-cta mt-3.5 flex h-12 w-full items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={pw.length === 0 || unlocking}
+                  className="kz-cta mt-3.5 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Unlock and continue <ArrowRight className="h-4 w-4" />
+                  {unlocking ? "Verifying…" : "Unlock and continue"}{" "}
+                  <ArrowRight className="h-4 w-4" />
                 </button>
               </motion.div>
 
               <p className="kz-mono mt-4 text-center text-[10.5px] text-[var(--kz-smoke)]">
-                the password never leaves this browser
+                verified with salted scrypt on koza.click
               </p>
             </motion.div>
           )}
@@ -298,22 +303,19 @@ export function LinkGate({ slug }: { slug: string }) {
               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
               className="kz-key w-full max-w-md px-6 py-8 text-center"
             >
-              <p className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
-                404 · nothing lives here
-              </p>
-              <p className="kz-mono mt-3 text-[17px] tracking-tight">
+              <Badge variant="destructive">404 · Not Found</Badge>
+              <p className="kz-mono mt-3 text-[18px] tracking-tight">
                 <span className="text-[var(--kz-smoke)]">koza.click/</span>
                 <span className="text-[var(--kz-coral)]">{slug}</span>
               </p>
               <p className="mx-auto mt-3 max-w-xs text-[13px] leading-relaxed text-[var(--kz-ash)]">
-                koza links live in the browser that made them — or on the api that minted them.
-                This one wasn&apos;t born anywhere.
+                This short link does not exist or has been removed from the server.
               </p>
               <a
                 href="/"
                 className="kz-cta mt-5 inline-flex h-11 items-center gap-2 px-5 text-sm"
               >
-                Make this link yours <ArrowRight className="h-4 w-4" />
+                Create a short link <ArrowRight className="h-4 w-4" />
               </a>
             </motion.div>
           )}
@@ -321,23 +323,5 @@ export function LinkGate({ slug }: { slug: string }) {
       </main>
       <KozaFooter />
     </div>
-  );
-}
-
-function UnlockIcon() {
-  return (
-    <svg
-      className="h-5 w-5 text-[#1a0b0b]"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-    </svg>
   );
 }
