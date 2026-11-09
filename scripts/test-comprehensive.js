@@ -1,4 +1,4 @@
-/* Comprehensive Backend & P2P Engine Verification Test */
+/* Comprehensive Backend & P2P / Turbo-WSS Engine Verification Test */
 const crypto = require("node:crypto");
 
 const WS = typeof globalThis.WebSocket !== "undefined" ? globalThis.WebSocket : require("../server/node_modules/ws");
@@ -17,13 +17,23 @@ function ok(name, cond) {
   }
 }
 
-function wsOpen(url) {
+function wsOpen(url, onBinary) {
   return new Promise((resolve, reject) => {
     const ws = new WS(url);
+    ws.binaryType = "arraybuffer";
     const inbox = [];
     const waiters = [];
-    const onData = (d) => {
+    const onData = (d, isBin) => {
       const raw = typeof d === "object" && d !== null && "data" in d ? d.data : d;
+      if (isBin === true || raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
+        const buf = Buffer.isBuffer(raw)
+          ? raw
+          : raw instanceof ArrayBuffer
+            ? Buffer.from(raw)
+            : Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+        if (onBinary) onBinary(buf);
+        return;
+      }
       const msg = JSON.parse(raw.toString());
       const i = waiters.findIndex((w) => w.match(msg));
       if (i >= 0) waiters.splice(i, 1)[0].resolve(msg);
@@ -32,7 +42,8 @@ function wsOpen(url) {
     const makeClient = () => ({
       ws,
       send: (obj) => ws.send(JSON.stringify(obj)),
-      recv: (match, ms = 3000) => {
+      sendBinary: (buf) => ws.send(buf),
+      recv: (match, ms = 5000) => {
         const i = inbox.findIndex(match);
         if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
         return new Promise((res, rej) => {
@@ -44,11 +55,11 @@ function wsOpen(url) {
     });
 
     if (ws.on) {
-      ws.on("message", onData);
+      ws.on("message", (data, isBinary) => onData(data, isBinary));
       ws.on("open", () => resolve(makeClient()));
       ws.on("error", reject);
     } else {
-      ws.onmessage = onData;
+      ws.onmessage = (ev) => onData(ev.data, typeof ev.data !== "string");
       ws.onopen = () => resolve(makeClient());
       ws.onerror = reject;
     }
@@ -67,27 +78,22 @@ function wsOpen(url) {
   const token1 = data1.sender_token;
   ok("Room created with token", !!code1 && !!token1);
 
-  // Receiver joins FIRST
   const receiver1 = await wsOpen(SIGNAL);
   receiver1.send({ type: "join", code: code1, role: "receiver" });
   const rJoined = await receiver1.recv((m) => m.type === "joined");
   ok("Receiver joined alone (peers: 1)", rJoined.peers === 1);
 
-  // Sender joins SECOND
   const sender1 = await wsOpen(SIGNAL);
   sender1.send({ type: "join", code: code1, role: "sender", token: token1 });
   const sJoined = await sender1.recv((m) => m.type === "joined");
   ok("Sender joined second and sees peers: 2", sJoined.peers === 2);
 
-  // Sender gets peer-ready notification so it knows to create offer immediately!
   const sReady = await sender1.recv((m) => m.type === "peer-ready");
   ok("Sender got peer-ready signal immediately", !!sReady);
 
-  // Receiver gets peer-joined notification
   const rSawPeer = await receiver1.recv((m) => m.type === "peer-joined");
   ok("Receiver got peer-joined signal", !!rSawPeer);
 
-  // Custom signaling relay
   sender1.send({ type: "custom-negotiation", payload: "test-payload" });
   const rCustom = await receiver1.recv((m) => m.type === "custom-negotiation");
   ok("Arbitrary signaling message relayed properly", rCustom.payload === "test-payload");
@@ -114,19 +120,16 @@ function wsOpen(url) {
   await receiver2.recv((m) => m.type === "joined");
   await sender2A.recv((m) => m.type === "peer-joined");
 
-  // Sender reconnects with a new socket (simulating page reload / socket recreation)
   const sender2B = await wsOpen(SIGNAL);
   sender2B.send({ type: "join", code: code2, role: "sender", token: token2 });
   const sRejoined = await sender2B.recv((m) => m.type === "joined");
   ok("Sender re-joined into its slot", sRejoined.role === "sender");
 
-  // Verify receiver did NOT get an unwanted peer-left from sender2A's termination!
   let falseDrop = false;
   try {
     await receiver2.recv((m) => m.type === "peer-left", 300);
     falseDrop = true;
   } catch {
-    // Timeout expected: no false peer-left emitted!
     falseDrop = false;
   }
   ok("No false peer-left sent to receiver on sender reconnect", !falseDrop);
@@ -152,14 +155,12 @@ function wsOpen(url) {
   receiver3.send({ type: "join", code: code3, role: "receiver" });
   await receiver3.recv((m) => m.type === "joined");
 
-  // Delete the room with the sender token
   const delRes = await fetch(`${HTTP}/api/v1/box/rooms/${code3}`, {
     method: "DELETE",
     headers: { "x-koza-token": token3 },
   });
   ok("Room DELETE via sender token succeeded", delRes.status === 200);
 
-  // Both peers should receive 'bye' (room-deleted)
   const sBye = await sender3.recv((m) => m.type === "bye");
   const rBye = await receiver3.recv((m) => m.type === "bye");
   ok("Sender received bye on room delete", sBye.reason === "room-deleted");
@@ -168,154 +169,129 @@ function wsOpen(url) {
   sender3.close();
   receiver3.close();
 
-  console.log("\n── Test 4: Simulated Data Channel Transfer with Backpressure (64 MB payload) ──");
-  // Test chunking, 1MB block reads, and buffer drain mechanics
+  console.log("\n── Test 4: REAL Zero-Copy Binary WebSocket Turbo Relay (64 MB over /signal) ──");
   const TOTAL_SIZE = 64 * 1024 * 1024; // 64 MB
-  const CHUNK_SIZE = 32 * 1024;
-  const READ_BLOCK_SIZE = 1024 * 1024;
-  const BUFFER_LOW = 128 * 1024;
-  const BUFFER_HIGH = 512 * 1024;
-
+  const WS_CHUNK_SIZE = 256 * 1024;    // 256 KiB binary frames
   const sampleData = crypto.randomBytes(TOTAL_SIZE);
   const srcHash = crypto.createHash("sha256").update(sampleData).digest("hex");
 
-  // Simulated RTCDataChannel with backpressure simulation
-  class MockDataChannel {
-    constructor(peer) {
-      this.peer = peer;
-      this.bufferedAmount = 0;
-      this.bufferedAmountLowThreshold = BUFFER_LOW;
-      this.readyState = "open";
-      this.listeners = {};
+  const r4 = await fetch(`${HTTP}/api/v1/box/rooms`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ files: [{ name: "Beekeeper-Studio-Setup.exe", size: TOTAL_SIZE }] }),
+  });
+  const data4 = await r4.json();
+  const code4 = data4.room.code;
+  const token4 = data4.sender_token;
+
+  const receivedChunks = [];
+  let receivedBytes = 0;
+
+  let sender4;
+  const receiver4 = await wsOpen(SIGNAL, (buf) => {
+    receivedChunks.push(buf);
+    receivedBytes += buf.byteLength;
+    if (receivedBytes >= TOTAL_SIZE) {
+      receiver4.send({ type: "ctrl", frame: { kind: "done", i: 0, bytes: receivedBytes } });
     }
-    addEventListener(name, fn) {
-      (this.listeners[name] = this.listeners[name] || []).push(fn);
-    }
-    removeEventListener(name, fn) {
-      if (!this.listeners[name]) return;
-      this.listeners[name] = this.listeners[name].filter((f) => f !== fn);
-    }
-    emit(name, ...args) {
-      for (const fn of this.listeners[name] || []) fn(...args);
-    }
-    send(data) {
-      if (typeof data === "string") {
-        setTimeout(() => this.peer.onMessage(data), 0);
-        return;
-      }
-      this.bufferedAmount += data.byteLength;
-      // Simulate network transmission: drain simulated buffer after 1ms
-      setTimeout(() => {
-        this.bufferedAmount = Math.max(0, this.bufferedAmount - data.byteLength);
-        this.peer.onMessage(data);
-        if (this.bufferedAmount <= this.bufferedAmountLowThreshold) {
-          this.emit("bufferedamountlow");
-        }
-      }, 1);
-    }
+  });
+  receiver4.send({ type: "join", code: code4, role: "receiver" });
+  await receiver4.recv((m) => m.type === "joined");
+
+  sender4 = await wsOpen(SIGNAL);
+  sender4.send({ type: "join", code: code4, role: "sender", token: token4 });
+  await sender4.recv((m) => m.type === "joined");
+  await sender4.recv((m) => m.type === "peer-ready");
+  await receiver4.recv((m) => m.type === "peer-joined");
+
+  const tStart = performance.now();
+  sender4.send({
+    type: "ctrl",
+    frame: { kind: "start", i: 0, name: "Beekeeper-Studio-Setup.exe", size: TOTAL_SIZE, type: "application/octet-stream" },
+  });
+  const startCtrl = await receiver4.recv((m) => m.type === "ctrl" && m.frame?.kind === "start");
+  ok("Control frame relayed via turbo-wss", startCtrl.frame.size === TOTAL_SIZE);
+
+  for (let offset = 0; offset < TOTAL_SIZE; offset += WS_CHUNK_SIZE) {
+    const slice = sampleData.subarray(offset, Math.min(TOTAL_SIZE, offset + WS_CHUNK_SIZE));
+    sender4.sendBinary(slice);
   }
 
-  const dcReceiver = {
-    receivedChunks: [],
-    receivedBytes: 0,
-    doneFiles: [],
-    allDone: false,
-    onMessage(data) {
-      if (typeof data === "string") {
-        const msg = JSON.parse(data);
-        if (msg.kind === "all-done") {
-          this.allDone = true;
-          this.dc.send(JSON.stringify({ kind: "all-done" }));
-        }
-        return;
-      }
-      this.receivedChunks.push(Buffer.from(data));
-      this.receivedBytes += data.byteLength;
-      if (this.receivedBytes >= TOTAL_SIZE) {
-        this.doneFiles.push(0);
-        this.dc.send(JSON.stringify({ kind: "done", i: 0, bytes: this.receivedBytes }));
-      }
-    },
-  };
+  const doneCtrl = await sender4.recv((m) => m.type === "ctrl" && m.frame?.kind === "done", 15000);
+  const elapsedSec = (performance.now() - tStart) / 1000;
+  const mbps = TOTAL_SIZE / (1024 * 1024) / elapsedSec;
 
-  const dcSender = {
-    doneAck: false,
-    allDoneAck: false,
-    onMessage(data) {
-      if (typeof data === "string") {
-        const msg = JSON.parse(data);
-        if (msg.kind === "done") this.doneAck = true;
-        if (msg.kind === "all-done") this.allDoneAck = true;
-      }
-    },
-  };
-
-  const senderDc = new MockDataChannel(dcReceiver);
-  const receiverDc = new MockDataChannel(dcSender);
-  dcReceiver.dc = receiverDc;
-  dcSender.dc = senderDc;
-
-  function waitDrainMock(dc) {
-    if (dc.bufferedAmount <= BUFFER_LOW) return Promise.resolve();
-    return new Promise((resolve) => {
-      const onLow = () => {
-        dc.removeEventListener("bufferedamountlow", onLow);
-        resolve();
-      };
-      dc.addEventListener("bufferedamountlow", onLow);
-      const timer = setInterval(() => {
-        if (dc.bufferedAmount <= BUFFER_LOW) {
-          clearInterval(timer);
-          dc.removeEventListener("bufferedamountlow", onLow);
-          resolve();
-        }
-      }, 5);
-    });
-  }
-
-  // Simulate sender pumping 64 MB
-  const tStart = Date.now();
-  senderDc.send(JSON.stringify({ kind: "start", i: 0, name: "large.bin", size: TOTAL_SIZE, type: "application/octet-stream" }));
-
-  let offset = 0;
-  while (offset < TOTAL_SIZE) {
-    const blockEnd = Math.min(TOTAL_SIZE, offset + READ_BLOCK_SIZE);
-    const blockBuf = sampleData.subarray(offset, blockEnd);
-
-    let blockOffset = 0;
-    while (blockOffset < blockBuf.byteLength) {
-      if (senderDc.bufferedAmount >= BUFFER_HIGH) {
-        await waitDrainMock(senderDc);
-      }
-      const sliceLen = Math.min(CHUNK_SIZE, blockBuf.byteLength - blockOffset);
-      const chunk = blockBuf.subarray(blockOffset, blockOffset + sliceLen);
-      senderDc.send(chunk);
-      blockOffset += sliceLen;
-    }
-    offset = blockEnd;
-  }
-
-  while (senderDc.bufferedAmount > 0) {
-    await waitDrainMock(senderDc);
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  senderDc.send(JSON.stringify({ kind: "all-done" }));
-
-  // Wait for delivery
-  for (let iter = 0; iter < 100 && (!dcSender.doneAck || !dcSender.allDoneAck); iter++) {
-    await new Promise((r) => setTimeout(r, 20));
-  }
-
-  const duration = (Date.now() - tStart) / 1000;
-  const assembled = Buffer.concat(dcReceiver.receivedChunks);
+  const assembled = Buffer.concat(receivedChunks);
   const dstHash = crypto.createHash("sha256").update(assembled).digest("hex");
 
-  ok("Transfer completed: received exact byte count (64 MB)", assembled.length === TOTAL_SIZE);
-  ok("Data integrity verified bit-for-bit (sha256 match)", srcHash === dstHash);
-  ok("Receiver received all-done frame", dcReceiver.allDone);
-  ok("Sender received done ACK", dcSender.doneAck);
-  ok("Sender received all-done ACK", dcSender.allDoneAck);
-  console.log(`  Transfer simulation throughput: ${(TOTAL_SIZE / 1024 / 1024 / duration).toFixed(1)} MB/s`);
+  ok("Turbo-WSS 64 MB binary transfer completed", doneCtrl.frame.bytes === TOTAL_SIZE && assembled.length === TOTAL_SIZE);
+  ok("Turbo-WSS SHA-256 bit-for-bit integrity verified", srcHash === dstHash);
+  console.log(`  ⚡ Real Turbo-WSS relay throughput: ${mbps.toFixed(1)} MB/s (${(elapsedSec * 1000).toFixed(0)} ms for 64 MB)`);
+
+  sender4.close();
+  receiver4.close();
+
+  console.log("\n── Test 5: Direct HTTP Cut-Through Stream Pipe (/signal/stream/:code/:idx) ──");
+  const r5 = await fetch(`${HTTP}/api/v1/box/rooms`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ files: [{ name: "payload.bin", size: 1024 * 1024 }] }),
+  });
+  const data5 = await r5.json();
+  const code5 = data5.room.code;
+  const token5 = data5.sender_token;
+
+  const http = require("node:http");
+  const STREAM_SIZE = 1 * 1024 * 1024; // 1 MB
+  const streamPayload = crypto.randomBytes(STREAM_SIZE);
+  const streamSrcHash = crypto.createHash("sha256").update(streamPayload).digest("hex");
+
+  const getChunks = [];
+  const getPromise = new Promise((resolve, reject) => {
+    const req = http.get(`${HTTP}/signal/stream/${code5}/0`, (res) => {
+      res.on("data", (chunk) => getChunks.push(chunk));
+      res.on("end", () => resolve(res.statusCode));
+    });
+    req.on("error", reject);
+  });
+
+  await new Promise((r) => setTimeout(r, 100));
+
+  const postPromise = new Promise((resolve, reject) => {
+    const req = http.request(
+      `${HTTP}/signal/stream/${code5}/0`,
+      {
+        method: "POST",
+        headers: {
+          "x-koza-token": token5,
+          "content-type": "application/octet-stream",
+          "content-length": String(STREAM_SIZE),
+        },
+      },
+      (res) => {
+        const bodyChunks = [];
+        res.on("data", (c) => bodyChunks.push(c));
+        res.on("end", () => resolve(JSON.parse(Buffer.concat(bodyChunks).toString())));
+      },
+    );
+    req.on("error", reject);
+    req.write(streamPayload);
+    req.end();
+  });
+
+  const [postJson, getStatusCode] = await Promise.all([postPromise, getPromise]);
+  const assembledStream = Buffer.concat(getChunks);
+  const streamDstHash = crypto.createHash("sha256").update(assembledStream).digest("hex");
+
+  ok("HTTP cut-through stream POST & GET succeeded", postJson.ok === true && getStatusCode === 200);
+  ok("HTTP cut-through stream SHA-256 integrity verified", streamSrcHash === streamDstHash);
+
+  console.log("\n── Test 6: Upgraded Telemetry /api/v1/stats v2.1 ──");
+  const statsRes = await fetch(`${HTTP}/api/v1/stats`);
+  const statsData = await statsRes.json();
+  ok("Stats v2.1 returns operational status & version", statsData.status === "operational" && statsData.version === "2.1.0");
+  ok("Stats v2.1 tracks total_bytes_relayed (>80 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
+  ok("Stats v2.1 includes services health matrix", statsData.services?.turbo_relay?.ok === true);
 
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);

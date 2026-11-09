@@ -67,6 +67,7 @@ export function Receiver({ code }: { code: string }) {
   const [receivedFor, setReceivedFor] = useState(0);
   const [errorReason, setErrorReason] = useState("");
   const [received, setReceived] = useState<ReceivedFile[]>([]);
+  const [transportMode, setTransportMode] = useState<"p2p-udp" | "turbo-wss" | null>(null);
 
   /* resolved once, on the client, before the first offer screen shows */
   const [boot] = useState(() => {
@@ -225,7 +226,8 @@ export function Receiver({ code }: { code: string }) {
             setStage("error");
           }
         },
-        onChannelOpen: () => {
+        onChannelOpen: (mode) => {
+          setTransportMode(mode);
           /* the sender starts pushing the moment the channel opens */
         },
         onFileStart: (index, meta) => {
@@ -364,6 +366,11 @@ export function Receiver({ code }: { code: string }) {
               {stage === "error" && "line trouble"}
             </span>
             <span className="flex items-center gap-3">
+              {stage === "receiving" && transportMode && (
+                <span className="kz-mono flex items-center gap-1.5 text-[11px] text-emerald-400">
+                  {transportMode === "p2p-udp" ? "direct udp" : "turbo stream"}
+                </span>
+              )}
               {needsPw && stage !== "done" && (
                 <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-coral)]">
                   <Lock className="h-3.5 w-3.5" /> locked

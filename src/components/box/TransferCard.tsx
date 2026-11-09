@@ -73,6 +73,7 @@ export function TransferCard() {
   const [scanIdx, setScanIdx] = useState(0);
   const [linkCopied, setLinkCopied] = useState(false);
   const [errorReason, setErrorReason] = useState("");
+  const [transportMode, setTransportMode] = useState<"p2p-udp" | "turbo-wss" | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const engineRef = useRef<BoxSender | null>(null);
@@ -259,7 +260,8 @@ export function TransferCard() {
           setStage("error");
         }
       },
-      onChannelOpen: () => {
+      onChannelOpen: (mode) => {
+        setTransportMode(mode);
         meterRef.current = new SpeedMeter();
         setStage("moving");
         const sender = engineRef.current;
@@ -335,6 +337,7 @@ export function TransferCard() {
     setEta(0);
     setPassword("");
     setErrorReason("");
+    setTransportMode(null);
   };
 
   const cancelTransfer = () => {
@@ -353,6 +356,7 @@ export function TransferCard() {
     setElapsed(0);
     setSpeed(0);
     setEta(0);
+    setTransportMode(null);
     toast("Transfer cancelled — the room is closed");
   };
 
@@ -397,6 +401,12 @@ export function TransferCard() {
           {stage === "error" && "line trouble"}
         </span>
         <span className="flex items-center gap-3">
+          {stage === "moving" && transportMode && (
+            <span className="kz-mono flex items-center gap-1.5 text-[11px] text-emerald-400">
+              <Zap className="h-3 w-3" />
+              {transportMode === "p2p-udp" ? "direct udp" : "turbo stream"}
+            </span>
+          )}
           {locked && stage !== "done" && (
             <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-coral)]">
               <ShieldCheck className="h-3.5 w-3.5" /> locked
