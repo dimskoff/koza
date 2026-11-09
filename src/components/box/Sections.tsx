@@ -2,11 +2,11 @@
 "use client";
 
 import { ArrowUpRight } from "lucide-react";
-import { BoxMark, LinkMark } from "../marks";
+import { BoxMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { wipeTo } from "../wipe";
 
-/* ── Slim nav (box.koza.click) with inline tactile workspace switcher ── */
+/* ── Slim nav (box.koza.click style) ─────────────────────────── */
 export function BoxNav() {
   const onHomeClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (typeof window !== "undefined" && window.location.hostname.startsWith("box.")) {
@@ -17,57 +17,26 @@ export function BoxNav() {
 
   return (
     <header className="px-4 pt-4">
-      <div className="kz-glass mx-auto flex h-12 w-full max-w-xl items-center justify-between rounded-2xl px-2">
-        {/* Left: 1-click inline workspace switcher (koza <-> box.koza.click) */}
-        <div
-          className="flex items-center gap-1 rounded-xl border border-[var(--kz-hairline)] bg-white/[0.025] p-1"
-          role="navigation"
-          aria-label="Workspace switcher"
+      <div className="kz-glass mx-auto flex h-12 w-full max-w-2xl items-center justify-between rounded-[14px] pl-4 pr-2">
+        <a
+          href="/box"
+          onClick={onHomeClick}
+          className="flex items-center gap-2.5"
+          aria-label="box.koza.click home"
         >
+          <BoxMark size={20} />
+          <span className="kz-mono text-sm text-[var(--kz-mist)]">
+            box<span className="text-[var(--kz-coral)]">.</span>koza.click
+          </span>
+        </a>
+        <div className="flex items-center gap-2">
           <button
-            type="button"
             onClick={() => wipeTo("/")}
-            className="group flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-[var(--kz-smoke)] transition-colors hover:bg-white/[0.04] hover:text-[var(--kz-mist)]"
-            title="Switch to koza.click (URL shortener)"
+            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1 px-3.5 text-[12px]"
+            aria-label="Switch to koza.click"
           >
-            <LinkMark size={14} />
-            <span className="kz-mono text-[12px]">koza</span>
+            koza <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
           </button>
-          <a
-            href="/box"
-            onClick={onHomeClick}
-            className="flex h-7 items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.07] px-2.5 text-[var(--kz-mist)] shadow-xs transition-colors"
-            aria-current="page"
-          >
-            <BoxMark size={15} />
-            <span className="kz-mono text-[12.5px] font-medium">
-              box<span className="text-[var(--kz-coral)]">.</span>koza.click
-            </span>
-          </a>
-        </div>
-
-        {/* Right: Quick navigation & live status */}
-        <div className="flex items-center gap-1 pr-1">
-          <a
-            href="/docs"
-            className="kz-mono rounded-lg px-2.5 py-1.5 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.04] hover:text-[var(--kz-mist)]"
-          >
-            api
-          </a>
-          <a
-            href="/status"
-            className="kz-mono flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.04] hover:text-[var(--kz-mist)]"
-          >
-            <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            </span>
-            status
-          </a>
-          <span className="mx-0.5 hidden h-3.5 w-px bg-[var(--kz-hairline)] sm:block" />
-          <div className="hidden sm:block">
-            <GithubLink />
-          </div>
         </div>
       </div>
     </header>
@@ -78,7 +47,7 @@ export function BoxNav() {
 export function BoxFooter() {
   return (
     <footer className="kz-hairline-t">
-      <div className="kz-mono mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
+      <div className="kz-mono mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
         <a href="/policy" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
           policy <ArrowUpRight className="h-3 w-3" />
         </a>

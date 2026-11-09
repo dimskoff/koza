@@ -433,103 +433,102 @@ export function Shortener() {
           )}
         </div>
 
-        {/* Advanced options — floating drawer below the card so layout never jumps */}
-      </div>
-
-      <AnimatePresence initial={false}>
-        {advancedOpen && !isDone && (
-          <motion.div
-            initial={{ opacity: 0, y: -6, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.99 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="kz-edge absolute inset-x-0 top-full z-30 mt-2 bg-[#0b0c0e]/95 p-4 shadow-[0_18px_48px_rgba(0,0,0,0.75)] backdrop-blur-xl"
-          >
-            <div className="grid gap-3 sm:grid-cols-2">
-              {/* Custom slug */}
-              <div>
-                <label
-                  htmlFor="kz-slug"
-                  className="kz-mono mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]"
-                >
-                  Custom slug
-                </label>
-                <div className="kz-inset flex items-center gap-1 px-3 py-2.5">
-                  <span
-                    className="kz-mono shrink-0 text-[13px] text-[var(--kz-smoke)]"
-                    aria-hidden="true"
+        {/* Advanced options — unfold inside the same card */}
+        <AnimatePresence initial={false}>
+          {advancedOpen && !isDone && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="grid gap-3 px-4 pb-3 pt-2.5 sm:grid-cols-2">
+                {/* Custom slug */}
+                <div>
+                  <label
+                    htmlFor="kz-slug"
+                    className="kz-mono mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]"
                   >
-                    koza.click/
-                  </span>
-                  <input
-                    id="kz-slug"
-                    value={slug}
-                    onChange={(e) => setSlug(e.target.value.toLowerCase())}
-                    placeholder="my-link"
-                    maxLength={32}
-                    spellCheck={false}
-                    autoComplete="off"
-                    className="kz-mono w-full min-w-0 bg-transparent text-[13px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
-                    aria-describedby="kz-slug-status"
-                  />
-                </div>
-                {slugStatus && (
-                  <p
-                    id="kz-slug-status"
-                    role="status"
-                    className={`kz-mono mt-1.5 text-[11px] ${slugStatus.kind === "ok" ? "text-emerald-400/80" : "text-[var(--kz-coral)]"}`}
-                  >
-                    {slugStatus.text}
-                  </p>
-                )}
-              </div>
-              {/* Password */}
-              <div>
-                <span className="kz-mono mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
-                  Password protection
-                </span>
-                {passwordOn ? (
-                  <div className="kz-inset flex items-center gap-2 px-3 py-2.5">
+                    Custom slug
+                  </label>
+                  <div className="kz-inset flex items-center gap-1 px-3 py-2.5">
+                    <span
+                      className="kz-mono shrink-0 text-[13px] text-[var(--kz-smoke)]"
+                      aria-hidden="true"
+                    >
+                      koza.click/
+                    </span>
                     <input
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      type={showPassword ? "text" : "password"}
-                      placeholder="min 4 characters"
-                      aria-label="Link password"
+                      id="kz-slug"
+                      value={slug}
+                      onChange={(e) => setSlug(e.target.value.toLowerCase())}
+                      placeholder="my-link"
+                      maxLength={32}
+                      spellCheck={false}
+                      autoComplete="off"
                       className="kz-mono w-full min-w-0 bg-transparent text-[13px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
+                      aria-describedby="kz-slug-status"
                     />
-                    <button
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="kz-mono shrink-0 cursor-pointer text-[10px] uppercase tracking-wider text-[var(--kz-ash)] hover:text-[var(--kz-mist)]"
-                      aria-pressed={showPassword}
-                    >
-                      {showPassword ? "Hide" : "Show"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setPasswordOn(false);
-                        setPassword("");
-                      }}
-                      className="kz-ghost-btn shrink-0 rounded-md p-1"
-                      aria-label="Remove password"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => setPasswordOn(true)}
-                    className="kz-inset flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-[13px] text-[var(--kz-smoke)] transition-colors hover:text-[var(--kz-ash)]"
-                  >
-                    <KeyRound className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
-                    Protect with a password
-                  </button>
-                )}
+                  {slugStatus && (
+                    <p
+                      id="kz-slug-status"
+                      role="status"
+                      className={`kz-mono mt-1.5 text-[11px] ${slugStatus.kind === "ok" ? "text-emerald-400/80" : "text-[var(--kz-coral)]"}`}
+                    >
+                      {slugStatus.text}
+                    </p>
+                  )}
+                </div>
+                {/* Password */}
+                <div>
+                  <span className="kz-mono mb-1.5 block text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+                    Password protection
+                  </span>
+                  {passwordOn ? (
+                    <div className="kz-inset flex items-center gap-2 px-3 py-2.5">
+                      <input
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        type={showPassword ? "text" : "password"}
+                        placeholder="min 4 characters"
+                        aria-label="Link password"
+                        className="kz-mono w-full min-w-0 bg-transparent text-[13px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
+                      />
+                      <button
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="kz-mono shrink-0 cursor-pointer text-[10px] uppercase tracking-wider text-[var(--kz-ash)] hover:text-[var(--kz-mist)]"
+                        aria-pressed={showPassword}
+                      >
+                        {showPassword ? "Hide" : "Show"}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPasswordOn(false);
+                          setPassword("");
+                        }}
+                        className="kz-ghost-btn shrink-0 rounded-md p-1"
+                        aria-label="Remove password"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setPasswordOn(true)}
+                      className="kz-inset flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-[13px] text-[var(--kz-smoke)] transition-colors hover:text-[var(--kz-ash)]"
+                    >
+                      <KeyRound className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
+                      Protect with a password
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* ── QR modal ───────────────────────────────────────────── */}
       <AnimatePresence>
