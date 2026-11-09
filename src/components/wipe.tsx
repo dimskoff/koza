@@ -4,8 +4,8 @@
 export {
   switchTo,
   wipeTo,
+  useProductState,
   useSiteTransition,
   WipeLayer,
-  isProductionDomain,
 } from "./transition";
-export type { TargetProduct } from "./transition";
+export type { ProductMode } from "./transition";

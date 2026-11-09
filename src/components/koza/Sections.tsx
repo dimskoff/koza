@@ -2,31 +2,36 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, Loader2 } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
-import { switchTo, useSiteTransition } from "../transition";
+import { switchTo, useProductState } from "../transition";
 
-/* ── Slim nav ────────────────────────────────────────────────── */
+/* ── Unified slim nav with smooth reactive switching ─────────── */
 export function KozaNav() {
-  const transitionTarget = useSiteTransition();
-  const isSwitchingToBox = transitionTarget === "box";
+  const { mode, isSwitchingTo } = useProductState();
+  const showBox = isSwitchingTo ? isSwitchingTo === "box" : mode === "box";
 
   return (
     <header className="px-4 pt-4">
       <div className="kz-glass mx-auto flex h-12 w-full max-w-2xl items-center justify-between rounded-[14px] pl-4 pr-2">
-        <a href="/" className="flex items-center gap-2.5" aria-label="koza.click home">
+        <button
+          type="button"
+          onClick={() => switchTo(showBox ? "url" : "box")}
+          className="flex cursor-pointer items-center gap-2.5 text-left outline-none"
+          aria-label={showBox ? "Switch to URL shortener" : "Switch to Box"}
+        >
           <motion.div
-            key={isSwitchingToBox ? "box-icon" : "link-icon"}
+            key={showBox ? "box-icon" : "link-icon"}
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.2 }}
           >
-            {isSwitchingToBox ? <BoxMark size={20} /> : <LinkMark size={20} />}
+            {showBox ? <BoxMark size={20} /> : <LinkMark size={20} />}
           </motion.div>
           <span className="kz-mono flex items-center text-sm text-[var(--kz-mist)]">
             <AnimatePresence initial={false}>
-              {isSwitchingToBox && (
+              {showBox && (
                 <motion.span
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: "auto", opacity: 1 }}
@@ -42,26 +47,30 @@ export function KozaNav() {
               koza<span className="text-[var(--kz-coral)]">.</span>click
             </span>
           </span>
-        </a>
+        </button>
+
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => switchTo("box")}
-            disabled={isSwitchingToBox}
-            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px] transition-all disabled:opacity-80"
-            aria-label="Switch to box.koza.click"
-          >
-            {isSwitchingToBox ? (
-              <>
-                <Loader2 className="h-3 w-3 animate-spin text-[var(--kz-coral)]" />
-                <span>box</span>
-              </>
-            ) : (
-              <>
-                <span>box</span>
-                <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
-              </>
-            )}
-          </button>
+          {showBox ? (
+            <button
+              type="button"
+              onClick={() => switchTo("url")}
+              className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px] transition-all"
+              aria-label="Switch to URL shortener"
+            >
+              <span>url</span>
+              <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => switchTo("box")}
+              className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px] transition-all"
+              aria-label="Switch to box.koza.click"
+            >
+              <span>box</span>
+              <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
+            </button>
+          )}
         </div>
       </div>
     </header>

@@ -3,9 +3,18 @@
 
 import { useSyncExternalStore } from "react";
 
-export type TargetProduct = "box" | "url" | null;
+export type ProductMode = "url" | "box";
 
-let currentTarget: TargetProduct = null;
+interface TransitionStore {
+  mode: ProductMode;
+  isSwitchingTo: ProductMode | null;
+}
+
+let storeState: TransitionStore = {
+  mode: "url",
+  isSwitchingTo: null,
+};
+
 const listeners = new Set<() => void>();
 
 function emitChange() {
@@ -14,33 +23,34 @@ function emitChange() {
   }
 }
 
-export function isProductionDomain(): boolean {
-  if (typeof window === "undefined") return false;
-  const h = window.location.hostname.toLowerCase();
-  return h === "koza.click" || h === "www.koza.click" || h === "box.koza.click";
+export function initProductMode(initial: ProductMode) {
+  if (storeState.mode !== initial && storeState.isSwitchingTo === null) {
+    storeState = { ...storeState, mode: initial };
+    emitChange();
+  }
 }
 
-export function switchTo(target: "box" | "url") {
-  if (currentTarget) return;
-  currentTarget = target;
+export function switchTo(target: ProductMode) {
+  if (storeState.mode === target || storeState.isSwitchingTo !== null) return;
+
+  // 1. Включаем анимацию перехода и скелетон
+  storeState = { ...storeState, isSwitchingTo: target };
   emitChange();
 
-  const isBoxTarget = target === "box";
-  let destination = isBoxTarget ? "/box" : "/";
-
-  if (isProductionDomain()) {
-    const host = window.location.hostname.toLowerCase();
-    if (isBoxTarget && !host.startsWith("box.")) {
-      destination = "https://box.koza.click";
-    } else if (!isBoxTarget && host.startsWith("box.")) {
-      destination = "https://koza.click";
-    }
-  }
-
-  // Плавная задержка 320мс для проигрывания анимации скелетона и навбара
+  // 2. Через 260 мс мягко переключаем активный режим без единой перезагрузки страницы
   window.setTimeout(() => {
-    window.location.href = destination;
-  }, 320);
+    storeState = { mode: target, isSwitchingTo: null };
+    emitChange();
+
+    try {
+      const newPath = target === "box" ? "/box" : "/";
+      if (window.location.pathname !== newPath) {
+        window.history.pushState(null, "", newPath);
+      }
+    } catch {
+      // игнорируем ошибку history если в sandbox
+    }
+  }, 260);
 }
 
 export function wipeTo(path: string) {
@@ -51,18 +61,22 @@ export function wipeTo(path: string) {
   }
 }
 
-export function useSiteTransition(): TargetProduct {
+export function useProductState(): TransitionStore {
   return useSyncExternalStore(
     (onStoreChange) => {
       listeners.add(onStoreChange);
       return () => listeners.delete(onStoreChange);
     },
-    () => currentTarget,
-    () => null,
+    () => storeState,
+    () => storeState,
   );
 }
 
-// Заглушка для обратной совместимости, чтобы ничего не ломалось
+export function useSiteTransition(): ProductMode | null {
+  const st = useProductState();
+  return st.isSwitchingTo;
+}
+
 export function WipeLayer() {
   return null;
 }
