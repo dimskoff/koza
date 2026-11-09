@@ -290,8 +290,105 @@ function wsOpen(url, onBinary) {
   const statsRes = await fetch(`${HTTP}/api/v1/stats`);
   const statsData = await statsRes.json();
   ok("Stats v2.1 returns operational status & version", statsData.status === "operational" && statsData.version === "2.1.0");
-  ok("Stats v2.1 tracks total_bytes_relayed (>80 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
+  ok("Stats v2.1 tracks total_bytes_relayed (>65 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
   ok("Stats v2.1 includes services health matrix", statsData.services?.turbo_relay?.ok === true);
+  ok("Stats v2.1 returns redirects & rooms_count numbers", typeof statsData.redirects === "number" && typeof statsData.rooms_count === "number");
+
+  console.log("\n── Test 7: 6x Parallel Turbo Lanes + 12-byte KOZA Header + Out-of-Order Reassembly ──");
+  const r7 = await fetch(`${HTTP}/api/v1/box/rooms`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ files: [{ name: "Beekeeper-Studio-Setup-6.2.0.exe", size: 32 * 1024 * 1024 }] }),
+  });
+  const data7 = await r7.json();
+  const code7 = data7.room.code;
+  const token7 = data7.sender_token;
+  const MULTI_SIZE = 32 * 1024 * 1024;
+  const MULTI_CHUNK = 128 * 1024;
+  const multiSrc = crypto.randomBytes(MULTI_SIZE);
+  const multiSrcHash = crypto.createHash("sha256").update(multiSrc).digest("hex");
+
+  const chunksMap = new Map();
+  let multiRecvBytes = 0;
+  let startFrameReceived = false;
+
+  const onLaneBinary = (buf) => {
+    const magic = buf.readUInt32LE(0);
+    const fileIdx = buf.readUInt32LE(4);
+    const seq = buf.readUInt32LE(8);
+    if (magic === 0x4b4f5a41 && fileIdx === 0) {
+      const payload = buf.subarray(12);
+      chunksMap.set(seq, payload);
+      multiRecvBytes += payload.byteLength;
+      if (multiRecvBytes >= MULTI_SIZE) {
+        recvPrimary.send({ type: "xfer", kind: "done", i: 0, bytes: multiRecvBytes });
+      }
+    }
+  };
+
+  const recvPrimary = await wsOpen(SIGNAL, onLaneBinary);
+  recvPrimary.send({ type: "join", code: code7, role: "receiver" });
+  await recvPrimary.recv((m) => m.type === "joined");
+
+  const recvLanes = [];
+  for (let i = 0; i < 6; i++) {
+    const rl = await wsOpen(SIGNAL, onLaneBinary);
+    rl.send({ type: "join-lane", code: code7, role: "receiver", lane: i + 1 });
+    await rl.recv((m) => m.type === "lane-joined");
+    recvLanes.push(rl);
+  }
+
+  const sendPrimary = await wsOpen(SIGNAL);
+  sendPrimary.send({ type: "join", code: code7, role: "sender", token: token7 });
+  await sendPrimary.recv((m) => m.type === "joined");
+  await sendPrimary.recv((m) => m.type === "peer-ready");
+
+  const sendLanes = [];
+  for (let i = 0; i < 6; i++) {
+    const sl = await wsOpen(SIGNAL);
+    sl.send({ type: "join-lane", code: code7, role: "sender", token: token7, lane: i + 1 });
+    await sl.recv((m) => m.type === "lane-joined");
+    sendLanes.push(sl);
+  }
+
+  // Send start control frame on primary control socket
+  sendPrimary.send({
+    kind: "start",
+    i: 0,
+    name: "Beekeeper-Studio-Setup-6.2.0.exe",
+    size: MULTI_SIZE,
+    mimeType: "application/x-msdownload",
+    transport: "turbo-wss",
+    type: "xfer",
+  });
+  const startMsg = await recvPrimary.recv((m) => m.type === "xfer" && m.kind === "start");
+  startFrameReceived = startMsg.mimeType === "application/x-msdownload" && startMsg.type === "xfer";
+  ok("Start frame preserves type='xfer' and mimeType='application/x-msdownload'", startFrameReceived);
+
+  // Stripe chunks across all 6 sender lanes
+  let seq = 0;
+  for (let off = 0; off < MULTI_SIZE; off += MULTI_CHUNK) {
+    const slice = multiSrc.subarray(off, Math.min(MULTI_SIZE, off + MULTI_CHUNK));
+    const frame = Buffer.allocUnsafe(12 + slice.byteLength);
+    frame.writeUInt32LE(0x4b4f5a41, 0);
+    frame.writeUInt32LE(0, 4);
+    frame.writeUInt32LE(seq, 8);
+    slice.copy(frame, 12);
+    sendLanes[seq % sendLanes.length].sendBinary(frame);
+    seq++;
+  }
+
+  const doneMsg = await sendPrimary.recv((m) => m.type === "xfer" && m.kind === "done", 10000);
+  ok("6x Parallel lanes completed 32 MB transfer", doneMsg.bytes === MULTI_SIZE);
+
+  const orderedParts = [];
+  for (let s = 0; s < seq; s++) {
+    orderedParts.push(chunksMap.get(s));
+  }
+  const multiDstHash = crypto.createHash("sha256").update(Buffer.concat(orderedParts)).digest("hex");
+  ok("6x Parallel out-of-order reassembly SHA-256 verified bit-for-bit", multiSrcHash === multiDstHash);
+
+  for (const l of [...recvLanes, ...sendLanes, recvPrimary, sendPrimary]) l.close();
 
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);

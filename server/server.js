@@ -205,7 +205,8 @@ async function readJson(req) {
 
 function authorized(req) {
   if (!ADMIN_KEY) return true;
-  return safeEqual(req.headers["x-koza-key"] || "", ADMIN_KEY);
+  const key = req.headers["x-koza-key"] || req.headers["x-koza-admin-key"] || "";
+  return safeEqual(String(key), ADMIN_KEY);
 }
 
 /* ── active signaling lines & direct HTTP stream pipes ──────────────── */
@@ -226,7 +227,13 @@ function closeLine(code, reason = "room-closed") {
   const line = lines.get(code);
   if (!line) return;
   lines.delete(code);
-  for (const peer of [line.sender, line.receiver]) {
+  const allPeers = new Set([
+    line.sender,
+    line.receiver,
+    ...(line.senderLanes || []),
+    ...(line.receiverLanes || []),
+  ]);
+  for (const peer of allPeers) {
     if (peer && peer.readyState === 1) {
       peer.profile = null;
       sendWs(peer, { type: "bye", reason });
@@ -461,7 +468,10 @@ const server = http.createServer(async (req, res) => {
         status: "operational",
         version: "2.1.0",
         server_time: new Date().toISOString(),
+        node_version: process.version,
+        platform: `${process.platform}/${process.arch}`,
         links_count: allLinks.length,
+        redirects: allLinks.length,
         total_clicks: totalClicks,
         rooms_count: activeRooms.length,
         active_lines: activePairedLines,
@@ -499,9 +509,39 @@ const server = http.createServer(async (req, res) => {
               .sort((a, b) => b.createdAt - a.createdAt)
               .map((l) => publicLink(l, origin))
           : undefined,
-        rooms: isAdmin ? activeRooms : undefined,
+        rooms: isAdmin ? activeRooms : activeRooms.length,
+        admin_rooms: isAdmin ? activeRooms : undefined,
       };
       return sendJson(res, req, 200, stats);
+    }
+
+    /* ── admin overview endpoint ── */
+    if (pathname === "/api/v1/admin/overview" && req.method === "GET") {
+      pruneRooms();
+      if (!authorized(req)) {
+        return sendJson(res, req, 401, { error: "admin key required" });
+      }
+      const allLinks = Object.values(db.links)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((l) => ({
+          ...publicLink(l, origin),
+          code: l.slug,
+          target: l.url,
+          hasPassword: !!l.password,
+          createdAt: new Date(l.createdAt).toISOString(),
+        }));
+      const activeRooms = Object.values(db.rooms)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((r) => {
+          const pub = publicRoom(r, origin);
+          return {
+            ...pub,
+            hasPassword: pub.password,
+            createdAt: pub.created_at,
+            expiresAt: pub.expires_at,
+          };
+        });
+      return sendJson(res, req, 200, { links: allLinks, rooms: activeRooms });
     }
 
     /* ── index ── */
@@ -752,6 +792,7 @@ const wss = new WebSocketServer({
 function joinLine(ws, msg) {
   const code = String(msg.code || "").toUpperCase();
   const role = msg.role === "sender" ? "sender" : msg.role === "receiver" ? "receiver" : null;
+  const isLane = msg.type === "join-lane" || Boolean(msg.lane);
   if (!role || !/^[A-Z0-9]{4,12}$/.test(code)) {
     return sendWs(ws, { type: "error", reason: "bad-join" });
   }
@@ -773,9 +814,27 @@ function joinLine(ws, msg) {
 
   let line = lines.get(code);
   if (!line) {
-    line = { sender: null, receiver: null, bytesRelayed: 0 };
+    line = {
+      sender: null,
+      receiver: null,
+      senderLanes: new Set(),
+      receiverLanes: new Set(),
+      bytesRelayed: 0,
+    };
     lines.set(code, line);
   }
+
+  if (isLane) {
+    const laneSet = role === "sender" ? line.senderLanes : line.receiverLanes;
+    laneSet.add(ws);
+    ws.profile = { code, role, isLane: true };
+    sendWs(ws, { type: "lane-joined", role, lanes: laneSet.size });
+    if (role === "receiver" && line.sender && line.sender.readyState === 1) {
+      sendWs(line.sender, { type: "lane-ready", lanes: laneSet.size });
+    }
+    return;
+  }
+
   if (line[role] && line[role] !== ws) {
     try {
       line[role].profile = null;
@@ -785,7 +844,7 @@ function joinLine(ws, msg) {
     }
   }
   line[role] = ws;
-  ws.profile = { code, role };
+  ws.profile = { code, role, isLane: false };
 
   const other = role === "sender" ? line.receiver : line.sender;
   const isPeerOnline = Boolean(other && other.readyState === 1);
@@ -804,10 +863,23 @@ function leaveLine(ws) {
   ws.profile = null;
   const line = lines.get(p.code);
   if (!line) return;
+  if (p.isLane) {
+    line.senderLanes?.delete(ws);
+    line.receiverLanes?.delete(ws);
+    return;
+  }
   if (line[p.role] === ws) line[p.role] = null;
   const other = p.role === "sender" ? line.receiver : line.sender;
   if (other && other.readyState === 1) sendWs(other, { type: "peer-left" });
-  if (!line.sender && !line.receiver) lines.delete(p.code);
+  if (!line.sender && !line.receiver) {
+    for (const lws of [...(line.senderLanes || []), ...(line.receiverLanes || [])]) {
+      try {
+        lws.profile = null;
+        lws.close();
+      } catch {}
+    }
+    lines.delete(p.code);
+  }
 }
 
 wss.on("connection", (ws, req) => {
@@ -822,31 +894,48 @@ wss.on("connection", (ws, req) => {
   ws.on("message", (data, isBinary) => {
     ws.isAlive = true;
 
-    /* ── Zero-Copy Binary Turbo Relay ── */
+    /* ── Zero-Copy Multi-Lane Binary Turbo Relay ── */
     if (isBinary) {
       const p = ws.profile;
       if (!p) return;
       const line = lines.get(p.code);
       if (!line) return;
-      const peer = p.role === "sender" ? line.receiver : line.sender;
+
+      /* Pick the least-buffered receiver lane (or fall back to primary socket) */
+      const targetPool = p.role === "sender" ? line.receiverLanes : line.senderLanes;
+      let peer = null;
+      let minBuf = Infinity;
+      if (targetPool && targetPool.size > 0) {
+        for (const candidate of targetPool) {
+          if (candidate.readyState === 1 && candidate.bufferedAmount < minBuf) {
+            minBuf = candidate.bufferedAmount;
+            peer = candidate;
+          }
+        }
+      }
+      if (!peer) {
+        const primary = p.role === "sender" ? line.receiver : line.sender;
+        if (primary && primary.readyState === 1) peer = primary;
+      }
+
       if (peer && peer.readyState === 1) {
         const len = data.byteLength || data.length || 0;
         line.bytesRelayed = (line.bytesRelayed || 0) + len;
         telemetry.totalBytesRelayed += len;
         telemetry.totalFramesRelayed += 1;
 
-        /* Socket-level backpressure guard: if receiver socket buffer exceeds 6 MiB,
-           pause reading from sender socket until receiver drains */
-        if (peer.bufferedAmount > 6 * 1024 * 1024 && ws._socket && !ws._socket.isPaused()) {
+        /* Socket-level backpressure guard: if target socket buffer exceeds 8 MiB,
+           pause reading from sender socket until target drains */
+        if (peer.bufferedAmount > 8 * 1024 * 1024 && ws._socket && !ws._socket.isPaused()) {
           ws._socket.pause();
           const checkDrain = setInterval(() => {
-            if (peer.readyState !== 1 || peer.bufferedAmount < 2 * 1024 * 1024) {
+            if (peer.readyState !== 1 || peer.bufferedAmount < 3 * 1024 * 1024) {
               clearInterval(checkDrain);
               try {
                 ws._socket?.resume();
               } catch {}
             }
-          }, 15);
+          }, 12);
         }
 
         peer.send(data, { binary: true });
@@ -863,7 +952,7 @@ wss.on("connection", (ws, req) => {
     }
 
     if (!ws.profile) {
-      if (msg && msg.type === "join") joinLine(ws, msg);
+      if (msg && (msg.type === "join" || msg.type === "join-lane")) joinLine(ws, msg);
       else sendWs(ws, { type: "error", reason: "join first" });
       return;
     }
@@ -872,7 +961,7 @@ wss.on("connection", (ws, req) => {
       return sendWs(ws, { type: "pong", ts: msg.ts });
     }
 
-    if (msg && typeof msg.type === "string" && msg.type !== "join") {
+    if (msg && typeof msg.type === "string" && msg.type !== "join" && msg.type !== "join-lane") {
       const line = lines.get(ws.profile.code);
       if (!line) return;
       const peer = ws.profile.role === "sender" ? line.receiver : line.sender;

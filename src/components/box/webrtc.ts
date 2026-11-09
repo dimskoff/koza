@@ -1,145 +1,188 @@
-/* koza box v2 — Hybrid Direct-UDP WebRTC + Zero-Copy WSS Turbo Transfer Engine.
-   Automatically uses Direct UDP WebRTC when both peers have a direct non-relay
-   UDP path (LAN / open NAT), and seamlessly switches to the Zero-Copy Binary
-   WebSocket Turbo Pipe over TLS (:443) when behind VPNs, proxies, Symmetric
-   CGNAT, or TURN relays — completely eliminating the 200 KB/s TURN-TCP SCTP
-   bottleneck and 2.4 MB buffer freeze. */
+/* ─────────────────────────────────────────────────────────────────────
+   koza box — Hybrid Multi-Lane P2P + Parallel Turbo-WSS Transfer Engine (v2.2)
 
-export interface TurnOffer {
-  urls: string[];
-  username?: string;
-  credential?: string;
-}
+   Why transfers previously stalled or ran at 200 KB/s:
+   1. Control frame collision: `{ type: "xfer", ...payload }` had `type: file.type`
+      inside `payload`, overwriting `type: "xfer"` with the file's MIME type
+      (e.g. "application/x-msdownload"). The receiver ignored the `start` frame
+      and dropped incoming binary chunks.
+   2. Single-TCP / TURN-TCP bottleneck: over VPNs, CGNAT, or high-RTT routes,
+      a single TCP stream or TURN-TCP SCTP tunnel is throttled to ~200–1000 KB/s.
 
-export type TransportMode = "connecting" | "p2p-udp" | "turbo-wss";
+   Architecture v2.2:
+   • Dedicated Control Channel: Primary WebSocket (`this.ws`) carries ONLY
+     instant JSON signaling & control (`start`, `ack`, `done`, `all-done`),
+     never blocked behind binary queues.
+   • 6x Parallel Binary WebSocket Turbo Pool (`join-lane`): Opens 6 parallel
+     TLS :443 WebSocket lanes and routes each chunk to the lane with the
+     lowest `bufferedAmount`, multiplying TCP congestion window by 6x.
+   • 12-Byte Self-Describing Binary Frame Header (`[KOZA_MAGIC, fileIdx, seq]`):
+     Allows chunks to arrive out-of-order across 6 parallel WebSocket lanes
+     AND WebRTC Direct UDP DataChannel simultaneously, even if a binary chunk
+     arrives before the JSON `start` frame, reassembling bit-for-bit in order.
+   • Non-Destructive Direct UDP Upgrade: Starts streaming via Turbo-WSS
+     within ~200ms while WebRTC negotiates in parallel; upgrades to Direct UDP
+     (`host`/`srflx`/`prflx`) if a direct path opens, or closes TURN relay.
+   ───────────────────────────────────────────────────────────────────── */
 
-let iceCache: RTCIceServer[] | null = null;
-let iceCachedAt = 0;
+const STUN_FALLBACK: RTCIceServer[] = [
+  {
+    urls: [
+      "stun:stun.cloudflare.com:3478",
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+    ],
+  },
+];
 
-export async function fetchIceServers(): Promise<RTCIceServer[]> {
-  const now = Date.now();
-  if (iceCache && now - iceCachedAt < 30 * 60 * 1000) return iceCache;
-  const servers: RTCIceServer[] = [
-    {
-      urls: [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302",
-        "stun:stun.cloudflare.com:3478",
-      ],
-    },
-  ];
+let cachedIceServers: RTCIceServer[] | null = null;
+let cachedAt = 0;
+
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  if (cachedIceServers && Date.now() - cachedAt < 10 * 60 * 1000) {
+    return cachedIceServers;
+  }
   try {
-    const r = await fetch("/api/v1/turn", { signal: AbortSignal.timeout(3500) });
+    const r = await fetch("/api/v1/turn", { cache: "no-store" });
     if (r.ok) {
-      const data = (await r.json()) as { turn: TurnOffer | null };
-      if (data.turn?.urls?.length) {
-        servers.push({
-          urls: data.turn.urls,
-          username: data.turn.username,
-          credential: data.turn.credential,
-        });
+      const data = await r.json();
+      if (data?.turn?.urls && data.turn.username && data.turn.credential) {
+        cachedIceServers = [
+          ...STUN_FALLBACK,
+          {
+            urls: data.turn.urls,
+            username: data.turn.username,
+            credential: data.turn.credential,
+          },
+        ];
+        cachedAt = Date.now();
+        return cachedIceServers;
       }
     }
   } catch {
-    /* STUN fallback */
+    /* stun fallback */
   }
-  iceCache = servers;
-  iceCachedAt = now;
-  return servers;
+  return STUN_FALLBACK;
 }
 
+/* ── Tuning constants ── */
+const HEADER_MAGIC = 0x4b4f5a41; // "KOZA"
+const HEADER_BYTES = 12; // [magic: u32, fileIndex: u32, chunkSeq: u32]
+const PARALLEL_LANES = 6; // 6 parallel WebSocket data lanes
+const RTC_CHUNK_SIZE = 64 * 1024; // 64 KiB per WebRTC UDP message
+const WSS_CHUNK_SIZE = 128 * 1024; // 128 KiB per Turbo-WSS frame (smooth striping across 6 lanes)
+const READ_BLOCK_SIZE = 4 * 1024 * 1024; // 4 MiB File slice read batch
+const DC_BUFFER_LOW = 512 * 1024;
+const DC_BUFFER_HIGH = 2 * 1024 * 1024;
+const LANE_BUFFER_HIGH = 2 * 1024 * 1024; // 2 MiB per individual WS lane
+const TOTAL_WS_BUFFER_HIGH = 10 * 1024 * 1024; // 10 MiB across all 6 WS lanes
+const MAX_IN_FLIGHT = 20 * 1024 * 1024; // 20 MiB end-to-end unacknowledged window
+const ACK_STEP = 1 * 1024 * 1024; // Receiver sends ACK every 1 MiB received
+const BLOB_COMPACT_BYTES = 16 * 1024 * 1024; // Compact received chunks into Blob every 16 MiB
+
+export type TransportMode = "p2p-udp" | "turbo-wss" | "connecting";
+
+/* Pack 12-byte header + payload into a single Uint8Array */
+function packChunkFrame(
+  fileIndex: number,
+  chunkSeq: number,
+  sourceBuf: ArrayBuffer,
+  byteOffset: number,
+  byteLength: number,
+): Uint8Array {
+  const frame = new Uint8Array(HEADER_BYTES + byteLength);
+  const view = new DataView(frame.buffer);
+  view.setUint32(0, HEADER_MAGIC, true);
+  view.setUint32(4, fileIndex, true);
+  view.setUint32(8, chunkSeq, true);
+  frame.set(new Uint8Array(sourceBuf, byteOffset, byteLength), HEADER_BYTES);
+  return frame;
+}
+
+/* Resolve the signaling WebSocket URL */
 export function signalUrl(): string {
-  if (typeof window === "undefined") return "ws://localhost:8787/signal";
-  const custom = (window as unknown as { __KOZA_SIGNAL_URL?: string }).__KOZA_SIGNAL_URL;
-  if (custom) return custom;
-  if (process.env.NEXT_PUBLIC_SIGNAL_URL) return process.env.NEXT_PUBLIC_SIGNAL_URL;
-
-  const host = window.location.hostname;
-  const port = window.location.port;
-  if (host === "localhost" || host === "127.0.0.1" || port === "3000") {
-    return `ws://${host}:8787/signal`;
-  }
-
+  if (typeof window === "undefined") return "";
+  const env = process.env.NEXT_PUBLIC_KOZA_SIGNAL_URL;
+  if (env) return env;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return `${proto}//${host}:8787/signal`;
+  }
   return `${proto}//${window.location.host}/signal`;
 }
 
-/* ── shared signaling + binary socket plumbing ──────────────────────── */
-
-type JsonHandler = (msg: Record<string, unknown>) => void;
-type BinaryHandler = (buf: ArrayBuffer) => void;
-
 function openSignal(
   url: string,
-  onJson: JsonHandler,
-  onBinary: BinaryHandler,
+  onJson: (msg: Record<string, unknown>) => void,
+  onBinary: (buf: ArrayBuffer) => void,
   onClose: () => void,
 ): WebSocket {
   const ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
+
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+      } catch {}
+    }
+  }, 15_000);
+
   ws.onmessage = (e) => {
     if (typeof e.data === "string") {
       try {
         onJson(JSON.parse(e.data));
-      } catch {
-        /* ignore malformed json */
-      }
-    } else if (e.data instanceof ArrayBuffer) {
+      } catch {}
+      return;
+    }
+    if (e.data instanceof ArrayBuffer) {
       onBinary(e.data);
-    } else if (typeof Blob !== "undefined" && e.data instanceof Blob) {
+      return;
+    }
+    if (typeof Blob !== "undefined" && e.data instanceof Blob) {
       void e.data.arrayBuffer().then(onBinary);
     }
   };
-  ws.onclose = onClose;
+
+  const cleanup = () => {
+    clearInterval(pingInterval);
+    onClose();
+  };
+  ws.onerror = cleanup;
+  ws.onclose = cleanup;
   return ws;
 }
 
-/* ── high-speed chunking & flow control constants ───────────────────── */
-const READ_BLOCK_SIZE = 4 * 1024 * 1024; // 4 MiB disk read block (zero-copy sliced in RAM)
-const WSS_CHUNK_SIZE = 256 * 1024; // 256 KiB binary frame for WSS Turbo Pipe
-const RTC_CHUNK_SIZE = 64 * 1024; // 64 KiB binary frame for Direct UDP WebRTC
-
-const DC_BUFFER_LOW = 256 * 1024; // 256 KiB
-const DC_BUFFER_HIGH = 1024 * 1024; // 1 MiB
-const WS_BUFFER_LOW = 1024 * 1024; // 1 MiB
-const WS_BUFFER_HIGH = 4 * 1024 * 1024; // 4 MiB
-const MAX_IN_FLIGHT = 12 * 1024 * 1024; // 12 MiB end-to-end unacknowledged window
-const ACK_STEP = 512 * 1024; // Receiver sends ACK every 512 KiB
-const BLOB_COMPACT_BYTES = 16 * 1024 * 1024; // Compact ArrayBuffers into Blob every 16 MiB
-
-/* Inspect whether an open RTCPeerConnection is using a true direct UDP route
-   (host / srflx / prflx) vs a slow TURN relay. */
+/* Inspect RTCPeerConnection stats to determine if the active candidate pair
+   is a true Direct UDP path (host / srflx / prflx) vs a slow TURN relay */
 async function isDirectUdpConnection(pc: RTCPeerConnection): Promise<boolean> {
   try {
     const stats = await pc.getStats();
-    let selectedLocalId = "";
-    let selectedRemoteId = "";
+    let activePair: Record<string, unknown> | null = null;
     stats.forEach((report) => {
-      if (
-        report.type === "candidate-pair" &&
-        report.state === "succeeded" &&
-        (report.selected || report.nominated)
-      ) {
-        selectedLocalId = report.localCandidateId;
-        selectedRemoteId = report.remoteCandidateId;
+      if (report.type === "transport" && report.selectedCandidatePairId) {
+        const pair = stats.get(report.selectedCandidatePairId);
+        if (pair) activePair = pair;
       }
     });
-    if (!selectedLocalId || !selectedRemoteId) return false;
-    let localType = "";
-    let remoteType = "";
-    let localProto = "";
-    stats.forEach((report) => {
-      if (report.id === selectedLocalId) {
-        localType = String(report.candidateType || "");
-        localProto = String(report.protocol || "").toLowerCase();
-      }
-      if (report.id === selectedRemoteId) {
-        remoteType = String(report.candidateType || "");
-      }
-    });
-    if (localType === "relay" || remoteType === "relay") return false;
-    if (localProto && localProto !== "udp") return false;
-    return true;
+    if (!activePair) {
+      stats.forEach((report) => {
+        if (report.type === "candidate-pair" && report.selected && report.state === "succeeded") {
+          activePair = report;
+        }
+      });
+    }
+    if (!activePair) return false;
+    const local = stats.get(String((activePair as Record<string, unknown>).localCandidateId ?? ""));
+    const remote = stats.get(String((activePair as Record<string, unknown>).remoteCandidateId ?? ""));
+    if (!local || !remote) return false;
+
+    if (local.candidateType === "relay" || remote.candidateType === "relay") {
+      return false;
+    }
+    const proto = String(local.protocol || remote.protocol || "udp").toLowerCase();
+    return proto === "udp";
   } catch {
     return false;
   }
@@ -151,8 +194,8 @@ export interface SenderEvents {
   onJoined(): void;
   onPeerJoined(): void;
   onPeerLeft(): void;
-  onChannelOpen(mode?: TransportMode): void;
-  onProgress(bytesDelivered: number): void;
+  onChannelOpen(mode: TransportMode): void;
+  onProgress(queuedBytes: number): void;
   onFileQueued(index: number): void;
   onFileDone(index: number): void;
   onAllDone(): void;
@@ -161,6 +204,7 @@ export interface SenderEvents {
 
 export class BoxSender {
   private ws: WebSocket | null = null;
+  private lanes: WebSocket[] = [];
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
   private code = "";
@@ -174,6 +218,9 @@ export class BoxSender {
   private mode: TransportMode = "connecting";
   private fallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private ackWaiters: Array<() => void> = [];
+  private doneFiles = new Set<number>();
+  private fileDoneWaiters = new Map<number, () => void>();
+  private rrIdx = 0;
 
   constructor(private ev: SenderEvents) {}
 
@@ -185,12 +232,12 @@ export class BoxSender {
     this.code = code;
     this.token = token;
     void fetchIceServers();
+    const url = signalUrl();
+
     this.ws = openSignal(
-      signalUrl(),
+      url,
       (msg) => void this.onSignal(msg),
-      () => {
-        /* sender does not receive binary frames */
-      },
+      () => {},
       () => {
         if (!this.disposed) this.ev.onError("signal line dropped");
       },
@@ -199,7 +246,45 @@ export class BoxSender {
       this.ws?.send(
         JSON.stringify({ type: "join", code: this.code, role: "sender", token: this.token }),
       );
+      this.openTurboLanes(url);
     };
+  }
+
+  private openTurboLanes(url: string): void {
+    this.closeLanes();
+    for (let i = 0; i < PARALLEL_LANES; i++) {
+      if (this.disposed) return;
+      try {
+        const lws = new WebSocket(url);
+        lws.binaryType = "arraybuffer";
+        lws.onopen = () => {
+          if (this.disposed) {
+            lws.close();
+            return;
+          }
+          lws.send(
+            JSON.stringify({
+              type: "join-lane",
+              code: this.code,
+              role: "sender",
+              token: this.token,
+              lane: i + 1,
+            }),
+          );
+        };
+        lws.onerror = () => {};
+        this.lanes.push(lws);
+      } catch {}
+    }
+  }
+
+  private closeLanes(): void {
+    for (const lws of this.lanes) {
+      try {
+        lws.close();
+      } catch {}
+    }
+    this.lanes = [];
   }
 
   private async onSignal(msg: Record<string, unknown>): Promise<void> {
@@ -226,14 +311,26 @@ export class BoxSender {
       return;
     }
 
+    if (type === "lane-ready") {
+      /* Receiver's parallel turbo lanes are open — start transferring immediately! */
+      if (!this.channelOpened && !this.disposed) {
+        this.activateTransport("turbo-wss");
+      }
+      return;
+    }
+
     if (type === "peer-left" || type === "bye") {
       this.ev.onPeerLeft();
       this.teardownPc();
       return;
     }
 
-    if (type === "xfer") {
-      this.handleReceiverAck(msg);
+    if (type === "xfer" || type === "ctrl" || typeof msg.kind === "string") {
+      const payload =
+        type === "ctrl" && msg.frame && typeof msg.frame === "object"
+          ? (msg.frame as Record<string, unknown>)
+          : msg;
+      this.handleReceiverAck(payload);
       return;
     }
 
@@ -242,9 +339,7 @@ export class BoxSender {
         if (!this.pc) return;
         await this.pc.setRemoteDescription({ type: "answer", sdp: String(msg.sdp ?? "") });
         await this.flushCandidates();
-      } catch {
-        /* fallback timer will activate ws-turbo if webrtc fails */
-      }
+      } catch {}
       return;
     }
 
@@ -272,16 +367,20 @@ export class BoxSender {
   }
 
   private activateTransport(chosen: TransportMode): void {
-    if (this.channelOpened || this.disposed) return;
+    if (this.disposed) return;
+    if (this.channelOpened) {
+      /* If already streaming on turbo-wss and Direct UDP opens, upgrade seamlessly! */
+      if (chosen === "p2p-udp" && this.mode === "turbo-wss") {
+        this.mode = "p2p-udp";
+        this.ev.onChannelOpen("p2p-udp");
+      }
+      return;
+    }
     this.channelOpened = true;
     this.mode = chosen;
     if (this.fallbackTimer) {
       clearTimeout(this.fallbackTimer);
       this.fallbackTimer = null;
-    }
-    if (chosen === "turbo-wss") {
-      /* Close unneeded RTCPeerConnection so TURN/SCTP doesn't waste bandwidth */
-      this.teardownPc();
     }
     this.ev.onChannelOpen(chosen);
   }
@@ -291,14 +390,14 @@ export class BoxSender {
     this.makingOffer = true;
     this.channelOpened = false;
 
-    /* Race timer: if Direct UDP WebRTC doesn't open within 1100ms (e.g. VPN,
-       Blocked UDP, or Symmetric NAT), immediately launch Turbo WSS Pipe! */
+    /* Start streaming via Parallel Turbo-WSS after 250ms if Direct UDP hasn't opened yet,
+       while allowing WebRTC to continue negotiating in the background for a Direct UDP upgrade! */
     if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
     this.fallbackTimer = setTimeout(() => {
       if (!this.channelOpened && !this.disposed && this.ws?.readyState === WebSocket.OPEN) {
         this.activateTransport("turbo-wss");
       }
-    }, 1100);
+    }, 250);
 
     try {
       this.teardownPc();
@@ -314,13 +413,14 @@ export class BoxSender {
       this.dc = dc;
 
       dc.onopen = async () => {
-        if (this.channelOpened || this.disposed) return;
+        if (this.disposed) return;
         const directUdp = await isDirectUdpConnection(pc);
         if (directUdp) {
           this.activateTransport("p2p-udp");
         } else {
-          /* Selected route is TURN relay! Never use SCTP-over-TURN-TCP (200 KB/s);
-             switch immediately to Zero-Copy Binary WebSocket Turbo Pipe! */
+          /* Selected route is a TURN relay! Close TURN PC so it doesn't waste bandwidth,
+             and ensure Parallel Turbo-WSS is active. */
+          this.teardownPc();
           this.activateTransport("turbo-wss");
         }
       };
@@ -333,20 +433,18 @@ export class BoxSender {
 
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          const candStr = e.candidate.candidate || "";
-          /* If receiver or sender only has TCP relay or we want fast trickle: relay it */
           this.relay({ type: "ice", candidate: e.candidate.toJSON() });
-          void candStr;
         }
       };
 
       pc.onconnectionstatechange = () => {
-        if (
-          (pc.connectionState === "failed" || pc.connectionState === "disconnected") &&
-          !this.channelOpened &&
-          this.ws?.readyState === WebSocket.OPEN
-        ) {
-          this.activateTransport("turbo-wss");
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          this.teardownPc();
+          if (!this.channelOpened && this.ws?.readyState === WebSocket.OPEN) {
+            this.activateTransport("turbo-wss");
+          } else if (this.mode === "p2p-udp") {
+            this.mode = "turbo-wss";
+          }
         }
       };
 
@@ -368,50 +466,102 @@ export class BoxSender {
     }
   }
 
+  /* Send JSON control message over the uncongested primary control WebSocket
+     (and over DataChannel if in p2p-udp mode). Note `type: "xfer"` is placed LAST
+     so `payload` can never overwrite it! */
   private sendControl(payload: Record<string, unknown>): void {
-    if (this.mode === "p2p-udp" && this.dc?.readyState === "open") {
-      this.dc.send(JSON.stringify(payload));
-    } else if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "xfer", ...payload }));
+    const wire = JSON.stringify({ ...payload, type: "xfer" });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(wire);
+    } else if (this.dc?.readyState === "open") {
+      this.dc.send(wire);
     } else {
       throw new Error("transport channel closed");
     }
   }
 
+  /* Pick the parallel WebSocket lane with the lowest bufferedAmount */
+  private pickBestWsLane(): WebSocket | null {
+    let best: WebSocket | null = null;
+    let minBuf = Infinity;
+    const n = this.lanes.length;
+    for (let k = 0; k < n; k++) {
+      const idx = (this.rrIdx + k) % n;
+      const cand = this.lanes[idx];
+      if (cand && cand.readyState === WebSocket.OPEN && cand.bufferedAmount < minBuf) {
+        minBuf = cand.bufferedAmount;
+        best = cand;
+        if (minBuf === 0) {
+          this.rrIdx = (idx + 1) % n;
+          break;
+        }
+      }
+    }
+    if (best) return best;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return this.ws;
+    return null;
+  }
+
+  private totalWsBuffered(): number {
+    let sum = this.ws?.readyState === WebSocket.OPEN ? this.ws.bufferedAmount : 0;
+    for (const l of this.lanes) {
+      if (l.readyState === WebSocket.OPEN) sum += l.bufferedAmount;
+    }
+    return sum;
+  }
+
   private sendBinaryChunk(chunk: Uint8Array): void {
-    if (this.mode === "p2p-udp" && this.dc?.readyState === "open") {
-      this.dc.send(chunk);
-    } else if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(chunk);
+    if (
+      this.mode === "p2p-udp" &&
+      this.dc?.readyState === "open" &&
+      this.dc.bufferedAmount < DC_BUFFER_HIGH
+    ) {
+      try {
+        this.dc.send(chunk as unknown as ArrayBufferView<ArrayBuffer>);
+        return;
+      } catch {
+        this.mode = "turbo-wss";
+      }
+    }
+    const lane = this.pickBestWsLane();
+    if (lane) {
+      lane.send(chunk);
     } else {
       throw new Error("transport channel closed mid-flight");
     }
   }
 
+  private reportCurrentProgress(): void {
+    const buffered =
+      this.mode === "p2p-udp" && this.dc?.readyState === "open"
+        ? this.dc.bufferedAmount + this.totalWsBuffered()
+        : this.totalWsBuffered();
+    const networkSent = Math.max(this.ackedBytes, this.queued - buffered);
+    this.ev.onProgress(networkSent);
+  }
+
   private async waitBackpressure(): Promise<void> {
     while (!this.disposed) {
+      this.reportCurrentProgress();
       const inFlight = this.queued - this.ackedBytes;
-      if (this.mode === "p2p-udp") {
-        const dc = this.dc;
-        if (!dc || dc.readyState !== "open") {
-          /* Seamless mid-flight failover from dropped WebRTC to WSS Turbo Pipe! */
-          if (this.ws?.readyState === WebSocket.OPEN) {
-            this.mode = "turbo-wss";
-            return;
-          }
-          throw new Error("data channel closed");
-        }
-        if (dc.bufferedAmount < DC_BUFFER_HIGH && inFlight < MAX_IN_FLIGHT) return;
+
+      if (this.mode === "p2p-udp" && this.dc?.readyState === "open") {
+        if (this.dc.bufferedAmount < DC_BUFFER_HIGH && inFlight < MAX_IN_FLIGHT) return;
       } else {
-        const ws = this.ws;
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          throw new Error("signal connection closed");
+        const bestLane = this.pickBestWsLane();
+        if (!bestLane) throw new Error("signal connection closed");
+        const totalBuf = this.totalWsBuffered();
+        if (
+          bestLane.bufferedAmount < LANE_BUFFER_HIGH &&
+          totalBuf < TOTAL_WS_BUFFER_HIGH &&
+          inFlight < MAX_IN_FLIGHT
+        ) {
+          return;
         }
-        if (ws.bufferedAmount < WS_BUFFER_HIGH && inFlight < MAX_IN_FLIGHT) return;
       }
 
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 12);
+        const timer = setTimeout(resolve, 16);
         this.ackWaiters.push(() => {
           clearTimeout(timer);
           resolve();
@@ -431,10 +581,11 @@ export class BoxSender {
     this.pc = null;
   }
 
-  /* Stream all staged files with zero-copy 4 MiB disk reads and sliding-window backpressure */
+  /* Stream all staged files across 6x Parallel Turbo-WSS lanes + Direct UDP */
   async sendFiles(files: File[]): Promise<void> {
     this.queued = 0;
     this.ackedBytes = 0;
+    this.doneFiles.clear();
 
     for (let i = 0; i < files.length; i++) {
       if (this.disposed) throw new Error("transfer cancelled");
@@ -445,12 +596,14 @@ export class BoxSender {
         i,
         name: file.name,
         size: file.size,
-        type: file.type || "application/octet-stream",
+        mimeType: file.type || "application/octet-stream",
         transport: this.mode,
       });
       this.ev.onFileQueued(i);
 
       let offset = 0;
+      let chunkSeq = 0;
+
       while (offset < file.size) {
         if (this.disposed) throw new Error("transfer cancelled");
 
@@ -463,46 +616,38 @@ export class BoxSender {
 
           await this.waitBackpressure();
 
-          const chunkSize = this.mode === "p2p-udp" ? RTC_CHUNK_SIZE : WSS_CHUNK_SIZE;
+          const chunkSize =
+            this.mode === "p2p-udp" && this.dc?.readyState === "open"
+              ? RTC_CHUNK_SIZE
+              : WSS_CHUNK_SIZE;
           const sliceLen = Math.min(chunkSize, blockBuf.byteLength - blockOffset);
-          /* Zero-copy Uint8Array view into the 4 MiB ArrayBuffer */
-          const chunkView = new Uint8Array(blockBuf, blockOffset, sliceLen);
+          const frame = packChunkFrame(i, chunkSeq++, blockBuf, blockOffset, sliceLen);
 
-          try {
-            this.sendBinaryChunk(chunkView);
-          } catch {
-            /* If WebRTC DataChannel threw Queue Full / Error, failover to WSS Turbo! */
-            if (this.mode === "p2p-udp" && this.ws?.readyState === WebSocket.OPEN) {
-              this.mode = "turbo-wss";
-              this.teardownPc();
-              this.sendBinaryChunk(chunkView);
-            } else {
-              throw new Error("failed to send chunk");
-            }
-          }
+          this.sendBinaryChunk(frame);
 
           blockOffset += sliceLen;
           this.queued += sliceLen;
-          /* Report smooth progress anchored to real network drain */
-          const buffered =
-            this.mode === "p2p-udp"
-              ? (this.dc?.bufferedAmount ?? 0)
-              : (this.ws?.bufferedAmount ?? 0);
-          const networkSent = Math.max(this.ackedBytes, this.queued - buffered);
-          this.ev.onProgress(networkSent);
+          this.reportCurrentProgress();
         }
 
         offset = blockEnd;
       }
 
-      /* Wait for local socket buffer to flush before marking file end */
-      while (!this.disposed) {
-        const buffered =
-          this.mode === "p2p-udp"
-            ? (this.dc?.bufferedAmount ?? 0)
-            : (this.ws?.bufferedAmount ?? 0);
-        if (buffered <= WS_BUFFER_LOW) break;
-        await new Promise((r) => setTimeout(r, 15));
+      /* Wait until receiver confirms file `i` is reassembled (or socket buffers drain) */
+      if (file.size > 0 && !this.doneFiles.has(i)) {
+        await new Promise<void>((resolve) => {
+          const checkTimer = setInterval(() => {
+            this.reportCurrentProgress();
+            if (this.disposed || this.doneFiles.has(i)) {
+              clearInterval(checkTimer);
+              resolve();
+            }
+          }, 30);
+          this.fileDoneWaiters.set(i, () => {
+            clearInterval(checkTimer);
+            resolve();
+          });
+        });
       }
     }
 
@@ -520,7 +665,18 @@ export class BoxSender {
       for (const w of waiters) w();
     }
     if (kind === "done") {
-      this.ev.onFileDone(Number(msg.i ?? 0));
+      const idx = Number(msg.i ?? 0);
+      if (!this.doneFiles.has(idx)) {
+        this.doneFiles.add(idx);
+        this.ev.onFileDone(idx);
+      }
+      const fw = this.fileDoneWaiters.get(idx);
+      if (fw) {
+        this.fileDoneWaiters.delete(idx);
+        fw();
+      }
+      const waiters = this.ackWaiters.splice(0, this.ackWaiters.length);
+      for (const w of waiters) w();
     } else if (kind === "all-done") {
       this.ev.onAllDone();
     }
@@ -534,7 +690,10 @@ export class BoxSender {
     }
     const waiters = this.ackWaiters.splice(0, this.ackWaiters.length);
     for (const w of waiters) w();
+    for (const fw of this.fileDoneWaiters.values()) fw();
+    this.fileDoneWaiters.clear();
     this.teardownPc();
+    this.closeLanes();
     try {
       this.ws?.close();
     } catch {}
@@ -548,11 +707,14 @@ export interface IncomingFile {
   name: string;
   size: number;
   type: string;
+  metaReady: boolean;
   blobParts: Blob[];
-  chunks: ArrayBuffer[];
-  chunkBytes: number;
+  orderedChunks: ArrayBuffer[];
+  orderedBytes: number;
+  chunksMap: Map<number, ArrayBuffer>;
+  nextSeq: number;
   received: number;
-  lastAcked: number;
+  finalized: boolean;
 }
 
 export interface ReceiverEvents {
@@ -568,12 +730,14 @@ export interface ReceiverEvents {
 
 export class BoxReceiver {
   private ws: WebSocket | null = null;
+  private lanes: WebSocket[] = [];
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
   private code = "";
+  private password = "";
   private disposed = false;
   private incoming = new Map<number, IncomingFile>();
-  private current = -1;
+  private current = 0;
   private totalReceived = 0;
   private lastTotalAcked = 0;
   private candidateQueue: RTCIceCandidateInit[] = [];
@@ -587,9 +751,12 @@ export class BoxReceiver {
 
   async connect(code: string, password?: string): Promise<void> {
     this.code = code;
+    this.password = password ?? "";
     void fetchIceServers();
+    const url = signalUrl();
+
     this.ws = openSignal(
-      signalUrl(),
+      url,
       (msg) => void this.onSignal(msg),
       (buf) => this.onBinaryChunk(buf),
       () => {
@@ -602,10 +769,76 @@ export class BoxReceiver {
           type: "join",
           code: this.code,
           role: "receiver",
-          password: password ?? "",
+          password: this.password,
         }),
       );
+      this.openTurboLanes(url);
     };
+  }
+
+  private openTurboLanes(url: string): void {
+    this.closeLanes();
+    for (let i = 0; i < PARALLEL_LANES; i++) {
+      if (this.disposed) return;
+      try {
+        const lws = new WebSocket(url);
+        lws.binaryType = "arraybuffer";
+        lws.onopen = () => {
+          if (this.disposed) {
+            lws.close();
+            return;
+          }
+          lws.send(
+            JSON.stringify({
+              type: "join-lane",
+              code: this.code,
+              role: "receiver",
+              password: this.password,
+              lane: i + 1,
+            }),
+          );
+        };
+        lws.onmessage = (e) => {
+          if (e.data instanceof ArrayBuffer) {
+            this.onBinaryChunk(e.data);
+          } else if (typeof Blob !== "undefined" && e.data instanceof Blob) {
+            void e.data.arrayBuffer().then((b) => this.onBinaryChunk(b));
+          }
+        };
+        lws.onerror = () => {};
+        this.lanes.push(lws);
+      } catch {}
+    }
+  }
+
+  private closeLanes(): void {
+    for (const lws of this.lanes) {
+      try {
+        lws.close();
+      } catch {}
+    }
+    this.lanes = [];
+  }
+
+  private getOrCreateEntry(index: number): IncomingFile {
+    let entry = this.incoming.get(index);
+    if (!entry) {
+      entry = {
+        name: `file-${index}`,
+        size: 0,
+        type: "application/octet-stream",
+        metaReady: false,
+        blobParts: [],
+        orderedChunks: [],
+        orderedBytes: 0,
+        chunksMap: new Map(),
+        nextSeq: 0,
+        received: 0,
+        finalized: false,
+      };
+      this.incoming.set(index, entry);
+    }
+    return entry;
   }
 
   private async onSignal(msg: Record<string, unknown>): Promise<void> {
@@ -627,8 +860,13 @@ export class BoxReceiver {
       return;
     }
 
-    if (type === "xfer") {
-      this.onControlFrame(msg);
+    /* Accept `xfer`, `ctrl`, OR any frame carrying `kind` (prevents any MIME `type` collision!) */
+    if (type === "xfer" || type === "ctrl" || typeof msg.kind === "string") {
+      const payload =
+        type === "ctrl" && msg.frame && typeof msg.frame === "object"
+          ? (msg.frame as Record<string, unknown>)
+          : msg;
+      this.onControlFrame(payload);
       return;
     }
 
@@ -698,7 +936,7 @@ export class BoxReceiver {
       await pc.setLocalDescription(answer);
       this.relay({ type: "answer", sdp: pc.localDescription?.sdp });
     } catch {
-      /* If WebRTC fails on receiver, WSS Turbo Pipe still works automatically */
+      /* Parallel Turbo-WSS handles transfer if WebRTC fails */
     }
   }
 
@@ -709,15 +947,16 @@ export class BoxReceiver {
   }
 
   private sendAck(payload: Record<string, unknown>): void {
-    if (this.dc?.readyState === "open") {
+    const wire = JSON.stringify({ ...payload, type: "xfer" });
+    if (this.ws?.readyState === WebSocket.OPEN) {
       try {
-        this.dc.send(JSON.stringify(payload));
+        this.ws.send(wire);
         return;
       } catch {}
     }
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.dc?.readyState === "open") {
       try {
-        this.ws.send(JSON.stringify({ type: "xfer", ...payload }));
+        this.dc.send(wire);
       } catch {}
     }
   }
@@ -730,24 +969,25 @@ export class BoxReceiver {
         this.mode = msg.transport;
         this.ev.onChannelOpen(this.mode);
       }
+      const mime = String(msg.mimeType ?? msg.fileType ?? "application/octet-stream");
       const meta = {
-        name: String(msg.name ?? "file"),
+        name: String(msg.name ?? `file-${i}`),
         size: Number(msg.size ?? 0),
-        type: String(msg.type ?? "application/octet-stream"),
+        type: mime,
       };
-      this.incoming.set(i, {
-        ...meta,
-        blobParts: [],
-        chunks: [],
-        chunkBytes: 0,
-        received: 0,
-        lastAcked: 0,
-      });
+      const cur = this.getOrCreateEntry(i);
+      cur.name = meta.name;
+      cur.size = meta.size;
+      cur.type = meta.type;
+      cur.metaReady = true;
       this.current = i;
-      this.ev.onFileStart(i, meta);
 
-      /* Handle 0-byte empty file edge case immediately */
-      if (meta.size === 0) {
+      this.ev.onFileStart(i, meta);
+      if (cur.received > 0) {
+        this.ev.onProgress(i, cur.received);
+      }
+
+      if (meta.size === 0 || (cur.received >= meta.size && cur.chunksMap.size === 0)) {
         this.finalizeFile(i);
       }
     } else if (kind === "all-done") {
@@ -757,40 +997,82 @@ export class BoxReceiver {
   }
 
   private onBinaryChunk(buf: ArrayBuffer): void {
-    const cur = this.incoming.get(this.current);
-    if (!cur) return;
+    let fileIndex = this.current >= 0 ? this.current : 0;
+    let chunkSeq = -1;
+    let payload: ArrayBuffer = buf;
 
-    cur.chunks.push(buf);
-    cur.chunkBytes += buf.byteLength;
-    cur.received += buf.byteLength;
-    this.totalReceived += buf.byteLength;
-
-    /* Compact ArrayBuffers into a Blob every 16 MiB so V8 JS heap stays < 32 MiB
-       even when receiving multi-gigabyte files */
-    if (cur.chunkBytes >= BLOB_COMPACT_BYTES) {
-      cur.blobParts.push(new Blob(cur.chunks));
-      cur.chunks = [];
-      cur.chunkBytes = 0;
+    if (buf.byteLength >= HEADER_BYTES) {
+      const view = new DataView(buf);
+      const magic = view.getUint32(0, true);
+      if (magic === HEADER_MAGIC) {
+        fileIndex = view.getUint32(4, true);
+        chunkSeq = view.getUint32(8, true);
+        payload = buf.slice(HEADER_BYTES);
+      }
     }
 
-    this.ev.onProgress(this.current, cur.received);
+    const cur = this.getOrCreateEntry(fileIndex);
+    if (cur.finalized) return;
 
-    if (cur.received >= cur.size) {
-      this.finalizeFile(this.current);
+    if (chunkSeq >= 0) {
+      cur.chunksMap.set(chunkSeq, payload);
+      /* Drain contiguous in-order chunks into orderedChunks */
+      while (cur.chunksMap.has(cur.nextSeq)) {
+        const part = cur.chunksMap.get(cur.nextSeq)!;
+        cur.chunksMap.delete(cur.nextSeq);
+        cur.orderedChunks.push(part);
+        cur.orderedBytes += part.byteLength;
+        cur.nextSeq += 1;
+
+        if (cur.orderedBytes >= BLOB_COMPACT_BYTES) {
+          cur.blobParts.push(new Blob(cur.orderedChunks));
+          cur.orderedChunks = [];
+          cur.orderedBytes = 0;
+        }
+      }
+    } else {
+      /* Legacy raw unheadered chunk fallback */
+      cur.orderedChunks.push(payload);
+      cur.orderedBytes += payload.byteLength;
+      if (cur.orderedBytes >= BLOB_COMPACT_BYTES) {
+        cur.blobParts.push(new Blob(cur.orderedChunks));
+        cur.orderedChunks = [];
+        cur.orderedBytes = 0;
+      }
+    }
+
+    cur.received += payload.byteLength;
+    this.totalReceived += payload.byteLength;
+
+    this.ev.onProgress(fileIndex, cur.received);
+
+    if (cur.metaReady && cur.size > 0 && cur.received >= cur.size && cur.chunksMap.size === 0) {
+      this.finalizeFile(fileIndex);
     } else if (this.totalReceived - this.lastTotalAcked >= ACK_STEP) {
       this.lastTotalAcked = this.totalReceived;
-      this.sendAck({ kind: "ack", i: this.current, bytes: this.totalReceived });
+      this.sendAck({ kind: "ack", i: fileIndex, bytes: this.totalReceived });
     }
   }
 
   private finalizeFile(i: number): void {
     const cur = this.incoming.get(i);
-    if (!cur) return;
-    if (cur.chunks.length > 0) {
-      cur.blobParts.push(new Blob(cur.chunks));
-      cur.chunks = [];
-      cur.chunkBytes = 0;
+    if (!cur || cur.finalized) return;
+    cur.finalized = true;
+
+    /* Flush any remaining chunks in sequence order */
+    if (cur.chunksMap.size > 0) {
+      const remainingKeys = [...cur.chunksMap.keys()].sort((a, b) => a - b);
+      for (const k of remainingKeys) {
+        cur.orderedChunks.push(cur.chunksMap.get(k)!);
+      }
+      cur.chunksMap.clear();
     }
+    if (cur.orderedChunks.length > 0) {
+      cur.blobParts.push(new Blob(cur.orderedChunks));
+      cur.orderedChunks = [];
+      cur.orderedBytes = 0;
+    }
+
     const blob = new Blob(cur.blobParts, { type: cur.type || "application/octet-stream" });
     cur.blobParts = [];
     this.incoming.delete(i);
@@ -813,6 +1095,7 @@ export class BoxReceiver {
   dispose(): void {
     this.disposed = true;
     this.teardownPc();
+    this.closeLanes();
     try {
       this.ws?.close();
     } catch {}

@@ -39,35 +39,40 @@ interface StatsData {
   status?: string;
   version?: string;
   server_time?: string;
-  uptime_seconds: number;
-  redirects: number;
-  total_clicks: number;
-  rooms: number;
+  uptime_seconds?: number;
+  redirects?: number;
+  links_count?: number;
+  total_clicks?: number;
+  rooms?: number | unknown[];
+  rooms_count?: number;
   active_lines?: number;
-  ws_clients: number;
-  node_version: string;
-  platform: string;
+  ws_clients?: number;
+  node_version?: string;
+  platform?: string;
   cpu_cores?: number;
   load_avg?: number[];
   memory?: {
     rss_mb: number;
     heap_used_mb: number;
     heap_total_mb: number;
-    external_mb: number;
+    external_mb?: number;
   };
-  memory_mb: number;
+  memory_mb?: number;
   transfer_stats?: {
     total_rooms_created: number;
     total_bytes_relayed: number;
-    total_files_relayed: number;
-    active_relay_streams: number;
+    total_files_relayed?: number;
+    total_frames_relayed?: number;
+    active_relay_streams?: number;
+    active_streams?: number;
   };
   services?: {
-    http_api: ServiceHealth;
-    ws_signaling: ServiceHealth;
-    turbo_relay: ServiceHealth;
-    turn_ice: ServiceHealth;
-    storage: ServiceHealth;
+    http_api?: ServiceHealth | string;
+    ws_signaling?: ServiceHealth | string;
+    ws_signal?: ServiceHealth | string;
+    turbo_relay?: ServiceHealth | string;
+    turn_ice?: ServiceHealth | string;
+    storage?: ServiceHealth | string;
   };
 }
 
@@ -194,23 +199,50 @@ export function StatusDashboard() {
       if (!k) return;
       setAdminLoading(true);
       try {
-        const r = await fetch("/api/v1/admin/overview", {
-          headers: { "x-koza-admin-key": k },
+        const r = await fetch("/api/v1/stats", {
+          headers: { "x-koza-key": k, "x-koza-admin-key": k },
           cache: "no-store",
         });
-        if (r.status === 401) {
+        if (r.status === 401 || r.status === 403) {
           toast.error("Invalid admin key");
           setAuthed(false);
           return;
         }
-        if (r.status === 403) {
-          toast.error("Admin panel disabled — set KOZA_ADMIN_KEY on server");
-          return;
-        }
         if (r.ok) {
           const data = await r.json();
-          setLinks(data.links ?? []);
-          setRooms(data.rooms ?? []);
+          if (data.is_admin === false) {
+            toast.error("Invalid admin key");
+            setAuthed(false);
+            return;
+          }
+          const rawLinks = Array.isArray(data.links) ? data.links : [];
+          const rawRooms = Array.isArray(data.admin_rooms)
+            ? data.admin_rooms
+            : Array.isArray(data.rooms)
+              ? data.rooms
+              : [];
+          setLinks(
+            rawLinks.map((l: Record<string, unknown>) => ({
+              code: String(l.code ?? l.slug ?? ""),
+              target: String(l.target ?? l.url ?? ""),
+              createdAt: String(l.createdAt ?? l.created_at ?? new Date().toISOString()),
+              clicks: Number(l.clicks ?? 0),
+              hasPassword: Boolean(l.hasPassword ?? l.password),
+              custom: Boolean(l.custom),
+            })),
+          );
+          setRooms(
+            rawRooms.map((rm: Record<string, unknown>) => ({
+              code: String(rm.code ?? ""),
+              files: Array.isArray(rm.files) ? rm.files : [],
+              hasPassword: Boolean(rm.hasPassword ?? rm.password),
+              createdAt: String(rm.createdAt ?? rm.created_at ?? new Date().toISOString()),
+              expiresAt: String(rm.expiresAt ?? rm.expires_at ?? new Date().toISOString()),
+              sender_online: Boolean(rm.sender_online),
+              receiver_online: Boolean(rm.receiver_online),
+              bytes_relayed: Number(rm.bytes_relayed ?? 0),
+            })),
+          );
           setAuthed(true);
         }
       } catch {
@@ -230,9 +262,10 @@ export function StatusDashboard() {
 
   const deleteLink = async (code: string) => {
     try {
+      const k = adminKey.trim();
       const r = await fetch(`/api/v1/links/${encodeURIComponent(code)}`, {
         method: "DELETE",
-        headers: { "x-koza-admin-key": adminKey.trim() },
+        headers: { "x-koza-key": k, "x-koza-admin-key": k },
       });
       if (r.ok) {
         setLinks((prev) => prev.filter((l) => l.code !== code));
@@ -248,9 +281,10 @@ export function StatusDashboard() {
 
   const deleteRoom = async (code: string) => {
     try {
+      const k = adminKey.trim();
       const r = await fetch(`/api/v1/box/rooms/${encodeURIComponent(code)}`, {
         method: "DELETE",
-        headers: { "x-koza-admin-key": adminKey.trim() },
+        headers: { "x-koza-key": k, "x-koza-admin-key": k },
       });
       if (r.ok) {
         setRooms((prev) => prev.filter((rm) => rm.code !== code));
@@ -291,40 +325,45 @@ export function StatusDashboard() {
 
   const serviceRows = useMemo(() => {
     const s = stats?.services;
+    const isOk = (v: ServiceHealth | string | undefined) =>
+      v === undefined ? true : typeof v === "string" ? v !== "down" : Boolean(v.ok);
+    const labelOf = (v: ServiceHealth | string | undefined, fallback: string) =>
+      typeof v === "object" && v?.label ? v.label : fallback;
+
     return [
       {
         id: "http",
         name: "Shortener & REST API",
-        detail: s?.http_api?.label ?? "Edge redirect & room registry",
-        ok: online === true && (s?.http_api?.ok ?? true),
+        detail: labelOf(s?.http_api, "Edge redirect & room registry"),
+        ok: online === true && isOk(s?.http_api),
         icon: Server,
       },
       {
         id: "ws",
         name: "WSS Signaling Line",
-        detail: s?.ws_signaling?.label ?? "Real-time WebRTC SDP & ICE broker",
-        ok: online === true && (s?.ws_signaling?.ok ?? true),
+        detail: labelOf(s?.ws_signaling ?? s?.ws_signal, "Real-time WebRTC SDP & ICE broker"),
+        ok: online === true && isOk(s?.ws_signaling ?? s?.ws_signal),
         icon: Radio,
       },
       {
         id: "turbo",
-        name: "Turbo Binary Pipe",
-        detail: s?.turbo_relay?.label ?? "Zero-copy TLS :443 binary stream relay",
-        ok: online === true && (s?.turbo_relay?.ok ?? true),
+        name: "Turbo Binary Pipe (6x Parallel)",
+        detail: labelOf(s?.turbo_relay, "Zero-copy TLS :443 multi-lane binary relay"),
+        ok: online === true && isOk(s?.turbo_relay),
         icon: Zap,
       },
       {
         id: "turn",
         name: "STUN / TURN ICE Relay",
-        detail: s?.turn_ice?.label ?? "NAT traversal & UDP punch-through",
-        ok: online === true && (s?.turn_ice?.ok ?? true),
+        detail: labelOf(s?.turn_ice, "NAT traversal & UDP punch-through"),
+        ok: online === true && isOk(s?.turn_ice),
         icon: Network,
       },
       {
         id: "storage",
         name: "Persistence Engine",
-        detail: s?.storage?.label ?? "Atomic link store · zero-disk file policy",
-        ok: online === true && (s?.storage?.ok ?? true),
+        detail: labelOf(s?.storage, "Atomic link store · zero-disk file policy"),
+        ok: online === true && isOk(s?.storage),
         icon: Database,
       },
     ];
@@ -335,7 +374,17 @@ export function StatusDashboard() {
   const heapTotalMb = stats?.memory?.heap_total_mb ?? 0;
   const activeLines = stats?.active_lines ?? 0;
   const relayedBytes = stats?.transfer_stats?.total_bytes_relayed ?? 0;
-  const totalRoomsCreated = stats?.transfer_stats?.total_rooms_created ?? stats?.rooms ?? 0;
+  const activeRoomsCount =
+    stats?.rooms_count ??
+    (typeof stats?.rooms === "number"
+      ? stats.rooms
+      : Array.isArray(stats?.rooms)
+        ? stats.rooms.length
+        : 0);
+  const totalRoomsCreated = stats?.transfer_stats?.total_rooms_created ?? activeRoomsCount;
+  const redirectsCount = Number(stats?.links_count ?? stats?.redirects ?? 0);
+  const clicksCount = Number(stats?.total_clicks ?? 0);
+  const wsClientsCount = Number(stats?.ws_clients ?? 0);
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
@@ -449,7 +498,7 @@ export function StatusDashboard() {
                 </div>
                 <p className="kz-mono mt-0.5 text-[11px] text-[var(--kz-smoke)]">
                   {stats
-                    ? `uptime ${fmtUptime(stats.uptime_seconds)} · ${stats.node_version} (${stats.platform}) · auto-sync 4s`
+                    ? `uptime ${fmtUptime(stats.uptime_seconds ?? 0)} · ${stats.node_version ?? "node"} (${stats.platform ?? "linux"}) · auto-sync 4s`
                     : "polling /api/v1/stats"}
                 </p>
               </div>
@@ -510,7 +559,7 @@ export function StatusDashboard() {
                   <ExternalLink className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
                 </div>
                 <p className="kz-mono mt-2 text-[24px] font-medium leading-none text-[var(--kz-mist)]">
-                  {stats.redirects.toLocaleString()}
+                  {redirectsCount.toLocaleString()}
                 </p>
                 <p className="kz-mono mt-1.5 text-[11px] text-[var(--kz-smoke)]">
                   indexed redirects in store
@@ -526,7 +575,7 @@ export function StatusDashboard() {
                   <MousePointerClick className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
                 </div>
                 <p className="kz-mono mt-2 text-[24px] font-medium leading-none text-[var(--kz-mist)]">
-                  {stats.total_clicks.toLocaleString()}
+                  {clicksCount.toLocaleString()}
                 </p>
                 <p className="kz-mono mt-1.5 text-[11px] text-[var(--kz-smoke)]">
                   302 edge resolutions
@@ -543,7 +592,7 @@ export function StatusDashboard() {
                 </div>
                 <div className="mt-2 flex items-baseline gap-2">
                   <p className="kz-mono text-[24px] font-medium leading-none text-[var(--kz-mist)]">
-                    {stats.rooms}
+                    {activeRoomsCount}
                   </p>
                   {activeLines > 0 && (
                     <span className="kz-mono text-[11px] text-emerald-400">
@@ -565,7 +614,7 @@ export function StatusDashboard() {
                   <Wifi className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
                 </div>
                 <p className="kz-mono mt-2 text-[24px] font-medium leading-none text-[var(--kz-mist)]">
-                  {stats.ws_clients}
+                  {wsClientsCount}
                 </p>
                 <p className="kz-mono mt-1.5 text-[11px] text-[var(--kz-smoke)]">
                   connected signaling sockets

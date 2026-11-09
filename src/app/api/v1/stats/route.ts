@@ -17,14 +17,17 @@ export async function GET(req: Request) {
   const mem = process.memoryUsage();
 
   const adminKey = process.env.KOZA_ADMIN_KEY || "";
-  const authHeader = req.headers.get("x-koza-key") || "";
+  const authHeader = req.headers.get("x-koza-key") || req.headers.get("x-koza-admin-key") || "";
   const isAdmin = Boolean(!adminKey || (authHeader && authHeader === adminKey));
 
   return NextResponse.json({
     status: "operational",
     version: "2.1.0",
     server_time: new Date().toISOString(),
+    node_version: process.version,
+    platform: `${process.platform}/${process.arch}`,
     links_count: allLinks.length,
+    redirects: allLinks.length,
     total_clicks: totalClicks,
     rooms_count: activeRooms.length,
     active_lines: 0,
@@ -46,14 +49,15 @@ export async function GET(req: Request) {
       active_streams: 0,
     },
     services: {
-      http_api: "operational",
-      ws_signal: "operational",
-      turbo_relay: "operational",
-      turn_ice: "stun-only",
-      storage: "operational",
+      http_api: { ok: true, status: "operational", label: "Edge redirect & room registry" },
+      ws_signaling: { ok: true, status: "operational", label: "Real-time WebRTC SDP & ICE broker" },
+      turbo_relay: { ok: true, status: "operational", label: "Zero-copy TLS :443 binary stream relay" },
+      turn_ice: { ok: true, status: "stun-only", label: "STUN only" },
+      storage: { ok: true, status: "operational", label: "Atomic link store · zero-disk file policy" },
     },
     is_admin: isAdmin,
     links: isAdmin ? allLinks.sort((a, b) => b.createdAt - a.createdAt).map(publicLink) : undefined,
-    rooms: isAdmin ? activeRooms : undefined,
+    rooms: isAdmin ? activeRooms : activeRooms.length,
+    admin_rooms: isAdmin ? activeRooms : undefined,
   });
 }
