@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { useEffect, useSyncExternalStore, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Copy, ExternalLink, Lock, QrCode, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Lock, MousePointerClick, QrCode, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { KozaQr } from "./QrCode";
 import {
   type KozaLink,
@@ -20,29 +26,26 @@ import {
 
 function FaviconAvatar({ url }: { url: string }) {
   const host = hostOf(url);
-  const [failed, setFailed] = useState(false);
   const letter = (host.charAt(0) || "?").toUpperCase();
+  const faviconUrl =
+    host && host !== "link"
+      ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
+      : undefined;
 
   return (
-    <span
-      className="kz-mono flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--kz-hairline)] bg-white/[0.04] text-sm uppercase text-[var(--kz-coral)]"
-      aria-hidden="true"
-    >
-      {!failed && host && host !== "link" ? (
-        <img
-          src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+    <Avatar className="h-8 w-8 shrink-0 rounded-lg border border-[var(--kz-hairline)] bg-white/[0.04] p-1.5">
+      {faviconUrl && (
+        <AvatarImage
+          src={faviconUrl}
           alt=""
-          width={18}
-          height={18}
-          loading="lazy"
           referrerPolicy="no-referrer"
-          className="h-4 w-4 rounded-sm object-contain"
-          onError={() => setFailed(true)}
+          className="rounded-xs object-contain"
         />
-      ) : (
-        letter
       )}
-    </span>
+      <AvatarFallback className="kz-mono rounded-none bg-transparent text-xs uppercase text-[var(--kz-coral)]">
+        {letter}
+      </AvatarFallback>
+    </Avatar>
   );
 }
 
@@ -92,7 +95,7 @@ export function RecentLinks() {
 
   return (
     <section aria-label="Your links, local to this browser">
-      <div className="kz-edge kz-scroll max-h-36 overflow-y-auto sm:max-h-48">
+      <div className="kz-edge kz-scroll max-h-44 overflow-y-auto sm:max-h-52">
         <ul className="divide-y divide-[var(--kz-hairline)]" aria-label="Saved short links">
           {links.map((link) => (
             <li
@@ -100,20 +103,54 @@ export function RecentLinks() {
               className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.025]"
             >
               <FaviconAvatar url={link.url} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
-                    koza.click/<span className="text-[var(--kz-ash)]">{link.slug}</span>
+
+              <HoverCard openDelay={220} closeDelay={100}>
+                <HoverCardTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => copy(shortUrlOf(link.slug), "Link")}
+                    className="min-w-0 flex-1 cursor-pointer text-left"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
+                        koza.click/<span className="text-[var(--kz-coral)]">{link.slug}</span>
+                      </p>
+                      {link.locked && (
+                        <Lock className="h-3 w-3 shrink-0 text-[var(--kz-coral)]" />
+                      )}
+                    </div>
+                    <p className="kz-mono mt-0.5 truncate text-[11px] text-[var(--kz-smoke)]">
+                      {hostOf(link.url)} · {timeAgo(link.createdAt)} · {link.clicks} clicks
+                    </p>
+                  </button>
+                </HoverCardTrigger>
+                <HoverCardContent
+                  align="start"
+                  sideOffset={8}
+                  className="w-72 rounded-xl border border-[var(--kz-hairline-strong)] bg-[#111214]/95 p-3.5 text-[var(--kz-mist)] shadow-2xl backdrop-blur-xl"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="kz-mono text-[12px] font-medium text-[var(--kz-mist)]">
+                      koza.click/<span className="text-[var(--kz-coral)]">{link.slug}</span>
+                    </span>
+                    <span className="kz-mono flex items-center gap-1 text-[11px] text-[var(--kz-ash)]">
+                      <MousePointerClick className="h-3 w-3 text-[var(--kz-coral)]" />
+                      {link.clicks}
+                    </span>
+                  </div>
+                  <p className="kz-mono mt-2 break-all text-[11px] leading-relaxed text-[var(--kz-smoke)]">
+                    {link.url}
                   </p>
-                  {link.locked && (
-                    <Lock className="h-3 w-3 shrink-0 text-[var(--kz-coral)]" />
-                  )}
-                </div>
-                <p className="kz-mono mt-0.5 truncate text-[11px] text-[var(--kz-smoke)]">
-                  {hostOf(link.url)} · {timeAgo(link.createdAt)} · {link.clicks} clicks
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
+                  <div className="mt-2.5 flex items-center justify-between border-t border-[var(--kz-hairline)] pt-2 text-[10.5px] text-[var(--kz-smoke)]">
+                    <span className="kz-mono">{timeAgo(link.createdAt)}</span>
+                    <span className="kz-mono">
+                      {link.locked ? "password locked" : "direct redirect"}
+                    </span>
+                  </div>
+                </HoverCardContent>
+              </HoverCard>
+
+              <div className="flex shrink-0 items-center gap-0.5 opacity-65 transition-opacity group-hover:opacity-100">
                 <IconBtn
                   label="Copy short link"
                   onClick={() => copy(shortUrlOf(link.slug), "Link")}

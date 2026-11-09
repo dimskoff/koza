@@ -1,51 +1,44 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, ArrowRight, KeyRound, Lock, ShieldCheck } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { KozaFooter, KozaNav } from "./Sections";
 import {
-  bumpClicks,
-  getLinksSnapshot,
-  getServerLinks,
-  hostOf,
-  subscribeLinks,
-} from "./lib";
+  ArrowRight,
+  Check,
+  KeyRound,
+  Loader2,
+  Lock,
+  Plus,
+  X,
+} from "lucide-react";
+import { Kbd } from "@/components/ui/kbd";
+import { Skeleton } from "@/components/ui/skeleton";
+import { KozaFooter, KozaNav } from "./Sections";
+import { hostOf } from "./lib";
 
-type GateState = "loading" | "missing" | "locked" | "jump" | "unlocked";
+type GateState = "loading" | "missing" | "locked" | "unlocked";
 
-type ServerProbe =
-  | { status: "checking" }
-  | { status: "none" }
-  | { status: "found"; url: string | null; password: boolean };
-
-const UNLOCK_BEAT_MS = 650;
-const emptySubscribe = () => () => {};
-
-export function LinkGate({ slug }: { slug: string }) {
-  const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
-  const links = useSyncExternalStore(subscribeLinks, getLinksSnapshot, getServerLinks);
+export function LinkGate({
+  slug,
+  initialState,
+}: {
+  slug: string;
+  initialState?: "locked" | "missing";
+}) {
+  const cleanSlug = slug.trim().toLowerCase();
+  const [state, setState] = useState<GateState>(initialState ?? "loading");
   const [pw, setPw] = useState("");
   const [pwWrong, setPwWrong] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockedUrl, setUnlockedUrl] = useState<string | null>(null);
-  const [server, setServer] = useState<ServerProbe>({ status: "checking" });
-  const probed = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const link = useMemo(
-    () => links.find((l) => l.slug === slug.toLowerCase()) ?? null,
-    [links, slug],
-  );
-
-  /* Probe the server for this slug so locked status & URL come from the authoritative backend */
+  /* Fallback probe only if SSR didn't already resolve state */
   useEffect(() => {
-    if (!mounted || probed.current) return;
-    probed.current = true;
+    if (initialState) return;
     let alive = true;
-    fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}`)
+    fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then(
         (
@@ -54,80 +47,38 @@ export function LinkGate({ slug }: { slug: string }) {
           } | null,
         ) => {
           if (!alive) return;
-          if (data?.link) {
-            setServer({
-              status: "found",
-              url: data.link.url ?? null,
-              password: Boolean(data.link.password),
-            });
-          } else if (link && !link.locked) {
-            setServer({
-              status: "found",
-              url: link.url,
-              password: false,
-            });
-          } else {
-            setServer({ status: "none" });
+          if (!data?.link) {
+            setState("missing");
+            return;
           }
+          if (data.link.password) {
+            setState("locked");
+            return;
+          }
+          if (data.link.url) {
+            void fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/hit`, {
+              method: "POST",
+              keepalive: true,
+            }).catch(() => {});
+            window.location.replace(data.link.url);
+            return;
+          }
+          setState("missing");
         },
       )
       .catch(() => {
-        if (alive) {
-          if (link && !link.locked) {
-            setServer({ status: "found", url: link.url, password: false });
-          } else {
-            setServer({ status: "none" });
-          }
-        }
+        if (alive) setState("missing");
       });
     return () => {
       alive = false;
     };
-  }, [mounted, link, slug]);
-
-  const serverLink = server.status === "found" ? server : null;
-  const hasPw = Boolean(serverLink?.password || link?.locked);
-
-  const state: GateState = !mounted
-    ? "loading"
-    : server.status === "checking"
-      ? "loading"
-      : server.status === "none"
-        ? "missing"
-        : hasPw
-          ? unlockedUrl
-            ? "unlocked"
-            : "locked"
-          : "jump";
-
-  const target = unlockedUrl ?? serverLink?.url ?? link?.url ?? null;
-  const linkId = link?.id;
-
-  useEffect(() => {
-    if ((state !== "jump" && state !== "unlocked") || !target) return;
-    if (linkId) {
-      bumpClicks(linkId);
-    }
-    try {
-      void fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}/hit`, {
-        method: "POST",
-        keepalive: true,
-      });
-    } catch {
-      /* best-effort */
-    }
-    if (!hasPw) {
-      window.location.replace(target);
-      return;
-    }
-    const t = window.setTimeout(() => window.location.replace(target), UNLOCK_BEAT_MS);
-    return () => window.clearTimeout(t);
-  }, [state, target, linkId, hasPw, slug]);
+  }, [cleanSlug, initialState]);
 
   const unlock = () => {
     if (!pw.trim() || unlocking) return;
     setUnlocking(true);
-    fetch(`/api/v1/links/${encodeURIComponent(slug.toLowerCase())}/unlock`, {
+    setPwWrong(false);
+    fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/unlock`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ password: pw }),
@@ -136,12 +87,18 @@ export function LinkGate({ slug }: { slug: string }) {
         if (r.status === 200) {
           const d = (await r.json()) as { url?: string };
           if (d.url) {
-            setPwWrong(false);
             setUnlockedUrl(d.url);
+            setState("unlocked");
+            void fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/hit`, {
+              method: "POST",
+              keepalive: true,
+            }).catch(() => {});
+            window.location.replace(d.url);
             return;
           }
         }
         setPwWrong(true);
+        inputRef.current?.focus();
       })
       .catch(() => setPwWrong(true))
       .finally(() => setUnlocking(false));
@@ -150,176 +107,210 @@ export function LinkGate({ slug }: { slug: string }) {
   return (
     <div className="kz-root flex min-h-dvh flex-col">
       <KozaNav />
-      <main className="flex flex-1 items-center justify-center px-4 py-10">
-        <AnimatePresence mode="wait" initial={false}>
-          {/* ── resolving beat ─────────────────────────────────── */}
-          {state === "loading" && (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex flex-col items-center gap-4"
-            >
-              <Badge variant="secondary">resolving link…</Badge>
-              <span className="h-1 w-40 overflow-hidden rounded-full bg-white/[0.07]">
-                <span className="kz-fill block h-full w-full rounded-full bg-[var(--kz-coral)]" />
+      <main className="flex flex-1 flex-col items-center px-4 pt-[13vh] pb-12 sm:pt-[17vh]">
+        <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
+          {state === "missing" ? (
+            <>
+              Link not{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                found
               </span>
-            </motion.div>
+              .
+            </>
+          ) : state === "unlocked" ? (
+            <>
+              Redirecting{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                now
+              </span>
+              .
+            </>
+          ) : (
+            <>
+              Protected{" "}
+              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
+                link
+              </span>
+              .
+            </>
           )}
+        </h1>
 
-          {/* ── password cleared → one quick beat, then gone ───── */}
-          {state === "unlocked" && target && (
-            <motion.div
-              key="unlocked"
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-              className="kz-key w-full max-w-md px-6 py-7 text-center"
-            >
+        <div className="mt-8 w-full max-w-xl">
+          <AnimatePresence mode="wait" initial={false}>
+            {/* ── FALLBACK SKELETON ─────────────────────────────── */}
+            {state === "loading" && (
               <motion.div
-                initial={{ scale: 0.4, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ type: "spring", stiffness: 420, damping: 20 }}
-                className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 shadow-[0_0_28px_rgba(16,185,129,0.3)]"
-                aria-hidden="true"
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="kz-edge overflow-hidden p-4"
               >
-                <ShieldCheck className="h-6 w-6" />
+                <Skeleton className="h-10 w-full rounded-xl bg-white/[0.05]" />
+                <div className="mt-3 flex items-center justify-between">
+                  <Skeleton className="h-3.5 w-32 rounded-md bg-white/[0.04]" />
+                  <Skeleton className="h-3.5 w-20 rounded-md bg-white/[0.04]" />
+                </div>
               </motion.div>
-              <div className="mt-4 flex justify-center">
-                <Badge variant="emerald">Unlocked · Redirecting</Badge>
-              </div>
-              <p className="kz-mono mt-3 truncate text-[13px] text-[var(--kz-ash)]">
-                <span className="text-[var(--kz-smoke)]">koza.click/</span>
-                <span className="text-[var(--kz-coral)]">{slug.toLowerCase()}</span> →{" "}
-                {hostOf(target)}
-              </p>
-              <span className="mt-5 block h-1 w-full overflow-hidden rounded-full bg-white/[0.07]">
-                <span
-                  className="kz-fill block h-full w-full rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]"
-                  style={{ animationDuration: `${UNLOCK_BEAT_MS}ms` }}
-                />
-              </span>
-            </motion.div>
-          )}
+            )}
 
-          {/* ── password gate ──────────────────────────────────── */}
-          {state === "locked" && (
-            <motion.div
-              key="locked"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              className="kz-key w-full max-w-md px-6 py-7"
-            >
-              <div className="flex flex-col items-center text-center">
-                <span
-                  className="relative flex h-12 w-12 items-center justify-center rounded-xl border border-[rgba(255,99,99,0.4)] bg-[rgba(255,99,99,0.08)]"
-                  aria-hidden="true"
-                >
-                  <Lock className="h-5 w-5 text-[var(--kz-coral)]" />
-                </span>
-                <Badge variant="coral" className="mt-4">
-                  Password Protected
-                </Badge>
-                <p className="mt-2.5 text-[17px] font-medium text-[var(--kz-mist)]">
-                  This short link is locked
-                </p>
-                <p className="kz-mono mt-1 text-[12px] text-[var(--kz-smoke)]">
-                  koza.click/<span className="text-[var(--kz-coral)]">{slug.toLowerCase()}</span>{" "}
-                  requires a password to unlock
-                </p>
-              </div>
-
+            {/* ── PASSWORD GATE (Sleek inline bar like Shortener) ── */}
+            {state === "locked" && (
               <motion.div
-                animate={pwWrong ? { x: [0, -8, 8, -6, 6, -2, 0] } : { x: 0 }}
-                transition={{ duration: 0.42 }}
-                className="mt-5"
+                key="locked"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
               >
-                <div
-                  className="kz-inset flex items-center gap-2.5 px-4 py-3"
+                <motion.div
+                  animate={pwWrong ? { x: [0, -8, 8, -6, 6, -2, 0] } : { x: 0 }}
+                  transition={{ duration: 0.4 }}
+                  className="kz-edge relative overflow-hidden pb-2.5"
                   style={
                     pwWrong
                       ? {
                           boxShadow:
-                            "inset 0 0 0 1px rgba(255,99,99,0.7), inset 0 1px 2px rgba(0,0,0,0.35)",
+                            "0 0 0 1px rgba(255,99,99,0.55), 0 12px 36px rgba(0,0,0,0.45)",
                         }
                       : undefined
                   }
                 >
-                  <KeyRound className="h-4 w-4 shrink-0 text-[var(--kz-coral)]" />
-                  <input
-                    value={pw}
-                    onChange={(e) => {
-                      setPw(e.target.value);
-                      setPwWrong(false);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") unlock();
-                    }}
-                    type="password"
-                    placeholder="enter the password"
-                    aria-label="Link password"
-                    aria-invalid={pwWrong}
-                    autoFocus
-                    autoComplete="off"
-                    className="kz-mono w-full min-w-0 bg-transparent text-[14px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
-                  />
-                </div>
-                {pwWrong && (
-                  <Alert variant="destructive" className="mt-3 py-2.5">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle className="text-xs">Incorrect password</AlertTitle>
-                    <AlertDescription className="text-[11px]">
-                      Please check the password and try again.
-                    </AlertDescription>
-                  </Alert>
-                )}
-                <button
-                  onClick={unlock}
-                  disabled={pw.length === 0 || unlocking}
-                  className="kz-cta mt-3.5 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {unlocking ? "Verifying…" : "Unlock and continue"}{" "}
-                  <ArrowRight className="h-4 w-4" />
-                </button>
+                  <div className="relative flex min-h-[56px] items-center gap-2.5 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4 transition-colors focus-within:bg-white/[0.04]">
+                    <KeyRound className="h-4 w-4 shrink-0 text-[var(--kz-coral)]" />
+                    <input
+                      ref={inputRef}
+                      value={pw}
+                      onChange={(e) => {
+                        setPw(e.target.value);
+                        setPwWrong(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") unlock();
+                      }}
+                      type="password"
+                      placeholder="Enter password..."
+                      aria-label="Link password"
+                      aria-invalid={pwWrong}
+                      autoFocus
+                      autoComplete="off"
+                      className="kz-mono h-10 w-full min-w-0 flex-1 bg-transparent text-[15px] text-[var(--kz-mist)] outline-none placeholder:text-[var(--kz-smoke)]"
+                    />
+                    {pw && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPw("");
+                          setPwWrong(false);
+                          inputRef.current?.focus();
+                        }}
+                        className="kz-ghost-btn shrink-0 rounded-lg p-1.5"
+                        aria-label="Clear password"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={unlock}
+                      disabled={pw.trim().length === 0 || unlocking}
+                      className="kz-cta flex h-10 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-[9px] px-4 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {unlocking ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Unlocking…
+                        </>
+                      ) : (
+                        <>
+                          Unlock
+                          <ArrowRight className="h-3.5 w-3.5" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Bottom strip inside card */}
+                  <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
+                    {pwWrong ? (
+                      <span className="kz-mono text-[11.5px] text-[var(--kz-coral)]">
+                        Wrong password — try again
+                      </span>
+                    ) : (
+                      <span className="kz-mono flex items-center gap-1.5 text-[11.5px] text-[var(--kz-smoke)]">
+                        <Lock className="h-3 w-3 text-[var(--kz-coral)]" />
+                        koza.click/<span className="text-[var(--kz-ash)]">{cleanSlug}</span>
+                      </span>
+                    )}
+                    <span className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-smoke)] sm:inline-flex">
+                      <Kbd>Enter ↵</Kbd> to unlock
+                    </span>
+                  </div>
+                </motion.div>
               </motion.div>
+            )}
 
-              <p className="kz-mono mt-4 text-center text-[10.5px] text-[var(--kz-smoke)]">
-                verified with salted scrypt on koza.click
-              </p>
-            </motion.div>
-          )}
-
-          {/* ── dead link ──────────────────────────────────────── */}
-          {state === "missing" && (
-            <motion.div
-              key="missing"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              className="kz-key w-full max-w-md px-6 py-8 text-center"
-            >
-              <Badge variant="destructive">404 · Not Found</Badge>
-              <p className="kz-mono mt-3 text-[18px] tracking-tight">
-                <span className="text-[var(--kz-smoke)]">koza.click/</span>
-                <span className="text-[var(--kz-coral)]">{slug}</span>
-              </p>
-              <p className="mx-auto mt-3 max-w-xs text-[13px] leading-relaxed text-[var(--kz-ash)]">
-                This short link does not exist or has been removed from the server.
-              </p>
-              <a
-                href="/"
-                className="kz-cta mt-5 inline-flex h-11 items-center gap-2 px-5 text-sm"
+            {/* ── UNLOCKED / REDIRECTING ────────────────────────── */}
+            {state === "unlocked" && unlockedUrl && (
+              <motion.div
+                key="unlocked"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="kz-edge overflow-hidden pb-2.5"
               >
-                Create a short link <ArrowRight className="h-4 w-4" />
-              </a>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                <div className="flex min-h-[56px] items-center justify-between gap-3 border-b border-[var(--kz-hairline)] bg-white/[0.02] px-4 py-2">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
+                      <Check className="h-4 w-4" strokeWidth={2.5} />
+                    </span>
+                    <span className="kz-mono truncate text-[14px] text-[var(--kz-mist)]">
+                      {hostOf(unlockedUrl)}
+                    </span>
+                  </div>
+                  <span className="kz-mono text-[11px] text-emerald-400">opening…</span>
+                </div>
+                <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
+                  <span className="kz-mono truncate text-[11.5px] text-[var(--kz-smoke)]">
+                    {unlockedUrl}
+                  </span>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── 404 MISSING (Clean inline card) ───────────────── */}
+            {state === "missing" && (
+              <motion.div
+                key="missing"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                className="kz-edge overflow-hidden pb-2.5"
+              >
+                <div className="flex min-h-[56px] items-center justify-between gap-3 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4">
+                  <p className="kz-mono min-w-0 truncate text-[15px]">
+                    <span className="text-[var(--kz-smoke)]">koza.click/</span>
+                    <span className="text-[var(--kz-coral)]">{cleanSlug}</span>
+                  </p>
+                  <a
+                    href="/"
+                    className="kz-cta flex h-10 shrink-0 items-center gap-1.5 rounded-[9px] px-4 text-[13px]"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    New link
+                  </a>
+                </div>
+                <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
+                  <span className="kz-mono text-[11.5px] text-[var(--kz-smoke)]">
+                    This short link does not exist or was removed
+                  </span>
+                  <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">404</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </main>
       <KozaFooter />
     </div>

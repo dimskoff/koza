@@ -1,42 +1,101 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { ArrowUpRight } from "lucide-react";
-import { LinkMark } from "../marks";
+import { usePathname } from "next/navigation";
+import { ArrowLeft, ArrowUpRight, Check, ChevronsUpDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Kbd } from "@/components/ui/kbd";
+import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { wipeTo } from "../wipe";
 
-/* ── Slim nav ────────────────────────────────────────────────── */
+/* ── Slim nav with product switcher & matching rounded-2xl radius ── */
 export function KozaNav() {
+  const pathname = usePathname();
+  const isSubpage = pathname !== "/";
+
   return (
     <header className="px-4 pt-4">
-      <div className="kz-glass mx-auto flex h-12 w-full max-w-2xl items-center justify-between rounded-full pl-4 pr-2">
-        <a href="/" className="flex items-center gap-2.5" aria-label="koza.click home">
-          <LinkMark size={20} />
-          <span className="kz-mono text-sm text-[var(--kz-mist)]">
-            koza<span className="text-[var(--kz-coral)]">.</span>click
-          </span>
-        </a>
-        <div className="flex items-center gap-2">
+      <div className="kz-glass mx-auto flex h-12 w-full max-w-2xl items-center justify-between rounded-2xl px-2.5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="group flex h-9 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors hover:bg-white/[0.05] data-[state=open]:bg-white/[0.06] outline-none"
+              aria-label="Switch koza product"
+            >
+              <LinkMark size={19} />
+              <span className="kz-mono text-[13.5px] font-medium text-[var(--kz-mist)]">
+                koza<span className="text-[var(--kz-coral)]">.</span>click
+              </span>
+              <ChevronsUpDown className="h-3.5 w-3.5 text-[var(--kz-smoke)] transition-colors group-hover:text-[var(--kz-ash)]" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={8}
+            className="w-64 rounded-2xl border border-[var(--kz-hairline-strong)] bg-[#111214]/95 p-1.5 text-[var(--kz-mist)] shadow-[0_16px_48px_rgba(0,0,0,0.65)] backdrop-blur-xl"
+          >
+            <DropdownMenuLabel className="kz-mono px-2.5 py-1 text-[10px] uppercase tracking-wider text-[var(--kz-smoke)]">
+              Switch workspace
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator className="my-1 bg-[var(--kz-hairline)]" />
+            <DropdownMenuItem
+              onClick={() => {
+                if (isSubpage) window.location.href = "/";
+              }}
+              className="flex cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2.5 focus:bg-white/[0.06] focus:text-[var(--kz-mist)]"
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[rgba(255,99,99,0.3)] bg-[rgba(255,99,99,0.08)]">
+                <LinkMark size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="kz-mono text-[12.5px] font-medium text-[var(--kz-mist)]">
+                  koza<span className="text-[var(--kz-coral)]">.</span>click
+                </p>
+                <p className="kz-mono text-[10.5px] text-[var(--kz-smoke)]">
+                  Short links, zero strings
+                </p>
+              </div>
+              <Check className="h-3.5 w-3.5 shrink-0 text-[var(--kz-coral)]" />
+            </DropdownMenuItem>
+
+            <DropdownMenuItem
+              onClick={() => wipeTo("/box")}
+              className="mt-0.5 flex cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2.5 focus:bg-white/[0.06] focus:text-[var(--kz-mist)]"
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--kz-hairline)] bg-white/[0.03]">
+                <BoxMark size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="kz-mono text-[12.5px] font-medium text-[var(--kz-mist)]">
+                  box<span className="text-[var(--kz-coral)]">.</span>koza.click
+                </p>
+                <p className="kz-mono text-[10.5px] text-[var(--kz-smoke)]">
+                  Direct peer-to-peer files
+                </p>
+              </div>
+              <Kbd className="text-[9.5px]">P2P</Kbd>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {isSubpage && (
           <a
-            href="/status"
-            className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-ash)] hover:text-[var(--kz-mist)] transition-colors sm:flex px-2 py-1 rounded-full hover:bg-white/[0.04]"
-            aria-label="System status & telemetry"
+            href="/"
+            className="kz-mono flex h-8 items-center gap-1.5 rounded-xl px-3 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.05] hover:text-[var(--kz-mist)]"
           >
-            <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            </span>
-            status
+            <ArrowLeft className="h-3.5 w-3.5 text-[var(--kz-coral)]" />
+            Shortener
           </a>
-          <button
-            onClick={() => wipeTo("/box")}
-            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1 px-3.5 text-[12px]"
-            aria-label="Switch to box.koza.click"
-          >
-            box <ArrowUpRight className="h-3 w-3" strokeWidth={2.4} />
-          </button>
-        </div>
+        )}
       </div>
     </header>
   );

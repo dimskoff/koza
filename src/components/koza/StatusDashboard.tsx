@@ -21,6 +21,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface ServiceHealth {
   ok: boolean;
@@ -304,6 +305,17 @@ export function StatusDashboard() {
         </div>
 
         {/* ── 6-CARD TELEMETRY METRICS GRID ──────────────────────── */}
+        {loading && !stats && (
+          <div className="grid grid-cols-2 divide-x divide-y divide-[var(--kz-hairline)] sm:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="p-4 sm:p-5">
+                <Skeleton className="h-3 w-20 rounded-md bg-white/[0.06]" />
+                <Skeleton className="mt-3 h-6 w-16 rounded-md bg-white/[0.08]" />
+                <Skeleton className="mt-2 h-2.5 w-28 rounded-md bg-white/[0.04]" />
+              </div>
+            ))}
+          </div>
+        )}
         {!loading && stats && (
           <div className="grid grid-cols-2 divide-x divide-y divide-[var(--kz-hairline)] sm:grid-cols-3">
             {/* 1. Shortened links */}

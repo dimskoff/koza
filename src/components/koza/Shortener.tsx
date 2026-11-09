@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Kbd } from "@/components/ui/kbd";
 import { KozaQr } from "./QrCode";
 import {
   type KozaLink,
@@ -405,11 +406,8 @@ export function Shortener() {
                   ▾
                 </span>
               </button>
-              <span className="kz-mono hidden text-[11px] text-[var(--kz-smoke)] md:block">
-                <kbd className="rounded-md border border-[var(--kz-hairline)] bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-[var(--kz-ash)]">
-                  Enter ↵
-                </kbd>{" "}
-                to shorten
+              <span className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-smoke)] md:inline-flex">
+                <Kbd>Enter ↵</Kbd> to shorten
               </span>
             </>
           ) : (

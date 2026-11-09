@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Check,
   Download,
-  Fingerprint,
   KeyRound,
   Lock,
   RotateCcw,
@@ -16,12 +15,13 @@ import {
   X,
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { BoxFooter, BoxNav } from "./Sections";
 import {
   FileGlyph,
+  FingerprintHover,
   KeepTabNote,
   PeerSpin,
-  ScanSweep,
   TransferPanel,
 } from "./visuals";
 import { wipeTo } from "../wipe";
@@ -312,7 +312,7 @@ export function Receiver({ code }: { code: string }) {
       />
       <BoxNav />
 
-      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
+      <main className="flex flex-1 flex-col items-center px-4 pt-[13vh] pb-12 sm:pt-[17vh]">
         <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           {stage === "receiving" ? (
             <>
@@ -379,13 +379,7 @@ export function Receiver({ code }: { code: string }) {
                 </span>
               )}
               {offer?.fingerprint && (stage === "offer" || stage === "receiving") && (
-                <span
-                  className="kz-mono hidden items-center gap-1 text-[11px] text-[var(--kz-smoke)] sm:flex"
-                  title={`Session fingerprint: ${offer.fingerprint}`}
-                >
-                  <Fingerprint className="h-3 w-3 text-[var(--kz-coral)]" />
-                  {offer.fingerprint.slice(0, 9)}
-                </span>
+                <FingerprintHover fingerprint={offer.fingerprint} />
               )}
               {stage === "receiving" && (
                 <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
@@ -398,27 +392,29 @@ export function Receiver({ code }: { code: string }) {
 
           <div className="p-5 sm:p-6">
             <AnimatePresence mode="wait" initial={false}>
-              {/* ── LINKING ─────────────────────────────────────── */}
+              {/* ── LINKING (Shadcn Skeleton + spinner) ──────────── */}
               {stage === "linking" && (
                 <motion.div
                   key="linking"
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.26 }}
-                  className="flex flex-col items-center py-3 text-center"
+                  transition={{ duration: 0.24 }}
+                  className="space-y-3"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <PeerSpin />
-                    <p className="text-[14px] font-medium text-[var(--kz-mist)]">
-                      Opening the direct line
-                    </p>
+                  <div className="kz-inset flex items-center gap-3 px-3.5 py-3">
+                    <Skeleton className="h-9 w-9 shrink-0 rounded-lg bg-white/[0.06]" />
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Skeleton className="h-3.5 w-2/3 rounded-md bg-white/[0.06]" />
+                      <Skeleton className="h-2.5 w-24 rounded-md bg-white/[0.04]" />
+                    </div>
                   </div>
-                  <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
-                    handshake · punch-through · key exchange
-                  </p>
-                  <div className="mt-4">
-                    <ScanSweep />
+                  <Skeleton className="h-12 w-full rounded-xl bg-white/[0.05]" />
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    <PeerSpin size={13} />
+                    <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
+                      connecting to room {code.toUpperCase()}…
+                    </span>
                   </div>
                 </motion.div>
               )}
@@ -590,8 +586,11 @@ export function Receiver({ code }: { code: string }) {
                     doneLabel="received"
                     caption={`${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${doneCount} saved`}
                   />
-                  <div className="mt-4 flex justify-center">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
                     <KeepTabNote text="stay on this tab — the line closes with it" />
+                    <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
+                      direct stream
+                    </span>
                   </div>
                 </motion.div>
               )}

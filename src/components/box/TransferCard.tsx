@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Check,
   Copy,
-  Fingerprint,
   KeyRound,
   Plus,
   QrCode,
@@ -22,6 +21,7 @@ import { KozaQr } from "../koza/QrCode";
 import {
   ConnectingDots,
   FileGlyph,
+  FingerprintHover,
   KeepTabNote,
   PeerAvatar,
   PeerSpin,
@@ -429,15 +429,7 @@ export function TransferCard() {
         </span>
 
         <span className="flex items-center gap-3">
-          {inRoom && fingerprint && (
-            <span
-              className="kz-mono hidden items-center gap-1 text-[11px] text-[var(--kz-smoke)] sm:flex"
-              title={`Session fingerprint: ${fingerprint}`}
-            >
-              <Fingerprint className="h-3 w-3 text-[var(--kz-coral)]" />
-              {fingerprint.slice(0, 9)}
-            </span>
-          )}
+          {inRoom && fingerprint && <FingerprintHover fingerprint={fingerprint} />}
           {inRoom && (
             <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
               <Timer className="h-3.5 w-3.5" />
@@ -725,16 +717,17 @@ export function TransferCard() {
             </AnimatePresence>
           </div>
 
-          <div className="mt-4 flex justify-center">
+          {/* Integrated bottom strip: keep-tab status beacon + compact Cancel */}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
             <KeepTabNote />
+            <button
+              onClick={cancelTransfer}
+              className="kz-mono flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.05] hover:text-[var(--kz-coral)]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Cancel
+            </button>
           </div>
-
-          <button
-            onClick={cancelTransfer}
-            className="kz-ghost-btn mt-4 flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-[13px]"
-          >
-            <RotateCcw className="h-4 w-4" /> Cancel transfer
-          </button>
         </div>
       )}
 
