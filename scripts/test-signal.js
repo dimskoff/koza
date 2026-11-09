@@ -1,6 +1,6 @@
 /* koza signaling smoke test — run: node scripts/test-signal.js
    expects the server on :8787 (KOZA_SIGNAL overrides the ws url) */
-const WebSocket = require("../server/node_modules/ws");
+const WS = typeof globalThis.WebSocket !== "undefined" ? globalThis.WebSocket : require("../server/node_modules/ws");
 
 const HTTP = process.env.KOZA_HTTP || "http://localhost:8787";
 const SIGNAL = process.env.KOZA_SIGNAL || "ws://localhost:8787/signal";
@@ -20,16 +20,17 @@ function ok(name, cond) {
 
 function wsOpen(url) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = new WS(url);
     const inbox = [];
     const waiters = [];
-    ws.on("message", (d) => {
-      const msg = JSON.parse(d.toString());
+    const onData = (d) => {
+      const raw = typeof d === "object" && d !== null && "data" in d ? d.data : d;
+      const msg = JSON.parse(raw.toString());
       const i = waiters.findIndex((w) => w.match(msg));
       if (i >= 0) waiters.splice(i, 1)[0].resolve(msg);
       else inbox.push(msg);
-    });
-    ws.on("open", () => resolve({
+    };
+    const makeClient = () => ({
       ws,
       recv: (match, ms = 3000) => {
         const i = inbox.findIndex(match);
@@ -39,8 +40,16 @@ function wsOpen(url) {
           setTimeout(() => rej(new Error("recv timeout")), ms);
         });
       },
-    }));
-    ws.on("error", reject);
+    });
+    if (ws.on) {
+      ws.on("message", onData);
+      ws.on("open", () => resolve(makeClient()));
+      ws.on("error", reject);
+    } else {
+      ws.onmessage = onData;
+      ws.onopen = () => resolve(makeClient());
+      ws.onerror = reject;
+    }
   });
 }
 

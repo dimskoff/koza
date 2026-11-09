@@ -26,9 +26,20 @@ export async function DELETE(req: Request, { params }: Ctx) {
   if (upstream) return upstream;
   const key = code.toUpperCase();
   const store = apiStore();
-  if (!store.rooms.has(key)) {
+  const room = store.rooms.get(key);
+  if (!room) {
     return NextResponse.json({ error: "no such room" }, { status: 404 });
   }
+
+  const adminKey = process.env.KOZA_ADMIN_KEY || "";
+  const ownToken = req.headers.get("x-koza-token") || "";
+  const authKey = req.headers.get("x-koza-key") || "";
+  const isOwn = Boolean(room.senderToken && ownToken && room.senderToken === ownToken);
+  const isAdmin = !adminKey || (authKey && authKey === adminKey);
+  if (!isOwn && !isAdmin) {
+    return NextResponse.json({ error: "admin key or sender token required" }, { status: 401 });
+  }
+
   store.rooms.delete(key);
   return NextResponse.json({ deleted: true, code: key });
 }

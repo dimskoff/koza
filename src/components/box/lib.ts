@@ -90,7 +90,11 @@ export class SpeedMeter {
   private smoothed = 0;
 
   push(totalBytes: number, now = Date.now()): number {
-    this.samples.push({ t: now, bytes: totalBytes });
+    if (this.samples.length > 0 && now === this.samples[this.samples.length - 1].t) {
+      this.samples[this.samples.length - 1].bytes = totalBytes;
+    } else {
+      this.samples.push({ t: now, bytes: totalBytes });
+    }
     while (this.samples.length > 1 && now - this.samples[0].t > 2500) {
       this.samples.shift();
     }

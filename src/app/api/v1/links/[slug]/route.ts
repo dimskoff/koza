@@ -23,6 +23,11 @@ export async function DELETE(req: Request, { params }: Ctx) {
   const { slug } = await params;
   const upstream = await proxyToBackend(req, `/api/v1/links/${encodeURIComponent(slug.toLowerCase())}`);
   if (upstream) return upstream;
+  const adminKey = process.env.KOZA_ADMIN_KEY || "";
+  const authKey = req.headers.get("x-koza-key") || "";
+  if (adminKey && authKey !== adminKey) {
+    return NextResponse.json({ error: "admin key required" }, { status: 401 });
+  }
   const store = apiStore();
   const key = slug.toLowerCase();
   if (!store.links.has(key)) {

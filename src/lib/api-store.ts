@@ -12,6 +12,7 @@ export interface ApiLink {
 
 export interface ApiRoom {
   code: string;
+  senderToken: string;
   passwordHash: string | null;
   files: { name: string; size: number }[];
   createdAt: number;

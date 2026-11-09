@@ -89,14 +89,20 @@ export function Receiver({ code }: { code: string }) {
       .then(
         (
           data: {
-            room?: { files?: { name: string; size: number }[]; password_hash?: string | null; created_at?: string };
+            room?: {
+              files?: { name: string; size: number }[];
+              password?: boolean;
+              password_hash?: string | null;
+              created_at?: string;
+            };
           } | null,
         ) => {
           if (!alive || !data?.room?.files?.length) return;
+          const hasPw = Boolean(data.room.password || data.room.password_hash);
           setOffer({
             files: data.room.files,
-            passwordHash: data.room.password_hash ?? null,
-            encrypted: Boolean(data.room.password_hash),
+            passwordHash: data.room.password_hash ?? (hasPw ? "locked" : null),
+            encrypted: hasPw,
             createdAt: Date.parse(data.room.created_at ?? "") || Date.now(),
           });
           setIsDemo(false);
@@ -115,6 +121,7 @@ export function Receiver({ code }: { code: string }) {
   const t0 = useRef(0);
   const tick = useRef<number | null>(null);
   const stageRef = useRef<Stage>("linking");
+  const lastProgressUiRef = useRef(0);
 
   useEffect(() => {
     stageRef.current = stage;
@@ -137,7 +144,7 @@ export function Receiver({ code }: { code: string }) {
   const totalBytes = offer?.files.reduce((a, f) => a + f.size, 0) ?? 0;
   const totalMoved = offer?.files.reduce((a, f) => a + (moved[f.name] ?? 0), 0) ?? 0;
   const overall = totalBytes > 0 ? Math.min(100, (totalMoved / totalBytes) * 100) : 0;
-  const needsPw = Boolean(offer?.passwordHash);
+  const needsPw = Boolean(offer?.passwordHash || offer?.encrypted);
   const doneCount = isDemo
     ? (offer?.files.filter((f) => (moved[f.name] ?? 0) >= f.size).length ?? 0)
     : received.length;
@@ -189,6 +196,7 @@ export function Receiver({ code }: { code: string }) {
       setPwWrong(false);
       setStage("receiving");
       t0.current = Date.now();
+      lastProgressUiRef.current = 0;
       movedRef.current = {};
       setMoved({});
       receivedRef.current = [];
@@ -197,6 +205,7 @@ export function Receiver({ code }: { code: string }) {
 
       tick.current = window.setInterval(() => {
         setReceivedFor(Date.now() - t0.current);
+        setMoved({ ...movedRef.current });
         const meter = meterRef.current;
         if (meter) {
           const movedBytes = offer.files.reduce((a, f) => a + (movedRef.current[f.name] ?? 0), 0);
@@ -220,31 +229,40 @@ export function Receiver({ code }: { code: string }) {
           /* the sender starts pushing the moment the channel opens */
         },
         onFileStart: (index, meta) => {
-          setMoved((m) => ({ ...m, [offer.files[index]?.name ?? meta.name]: 0 }));
+          const fileName = offer.files[index]?.name ?? meta.name;
+          movedRef.current = { ...movedRef.current, [fileName]: 0 };
+          setMoved({ ...movedRef.current });
         },
         onProgress: (index, bytes) => {
           const name = offer.files[index]?.name ?? `file-${index}`;
           movedRef.current = { ...movedRef.current, [name]: bytes };
-          setMoved(movedRef.current);
           const total = Object.values(movedRef.current).reduce((a, b) => a + b, 0);
           meterRef.current?.push(total);
+          const now = Date.now();
+          if (now - lastProgressUiRef.current >= 100) {
+            lastProgressUiRef.current = now;
+            setMoved({ ...movedRef.current });
+          }
         },
         onFileDone: (index, file) => {
           const record: ReceivedFile = { name: file.name, size: file.size, type: file.type, blob: file.blob };
           receivedRef.current = [...receivedRef.current, record];
-          setReceived(receivedRef.current);
+          setReceived([...receivedRef.current]);
+          movedRef.current = { ...movedRef.current, [file.name]: file.size };
+          setMoved({ ...movedRef.current });
           saveBlob(file.blob, file.name);
         },
         onAllDone: () => {
           stopClock();
+          setMoved({ ...movedRef.current });
           setStage("done");
           /* the all-done ack for the sender is still in flight — give the
              socket a beat to flush before tearing it down, otherwise the
              frame dies with the close and the sender never completes */
           const eng = engineRef.current;
           engineRef.current = null;
-          if (eng) window.setTimeout(() => eng.dispose(), 500);
-          toast.success("Delivered", { description: "The line is closed now." });
+          if (eng) window.setTimeout(() => eng.dispose(), 600);
+          toast.success("Delivered", { description: "The files have been saved to your device." });
         },
         onError: (reason) => {
           if (stageRef.current === "done") return;

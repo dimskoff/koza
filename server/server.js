@@ -71,9 +71,18 @@ function loadDb() {
 function saveDb() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tmp = `${DATA_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(db));
-    fs.renameSync(tmp, DATA_FILE);
+    const tmp = `${DATA_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), "utf8");
+    try {
+      fs.renameSync(tmp, DATA_FILE);
+    } catch {
+      fs.copyFileSync(tmp, DATA_FILE);
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
   } catch (err) {
     console.error("[koza] persist failed:", err.message);
   }
@@ -226,12 +235,43 @@ function publicRoom(r, origin) {
   };
 }
 
+/* ── active signaling lines (mapped by room code) ───────────────────── */
+const lines = new Map(); // code → { sender: ws|null, receiver: ws|null }
+
+function sendWs(ws, obj) {
+  if (ws && ws.readyState === 1 /* OPEN */) {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch {
+      /* ignore failed write */
+    }
+  }
+}
+
+function closeLine(code, reason = "room-closed") {
+  const line = lines.get(code);
+  if (!line) return;
+  lines.delete(code);
+  for (const peer of [line.sender, line.receiver]) {
+    if (peer && peer.readyState === 1) {
+      peer.profile = null;
+      sendWs(peer, { type: "bye", reason });
+      try {
+        peer.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
 function pruneRooms() {
   const now = Date.now();
   let changed = false;
   for (const code of Object.keys(db.rooms)) {
     if (now - db.rooms[code].createdAt > ROOM_TTL_MS) {
       delete db.rooms[code];
+      closeLine(code, "room-expired");
       changed = true;
     }
   }
@@ -485,6 +525,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (!room) return sendJson(res, req, 404, { error: "no such room (or it expired)" });
         delete db.rooms[code];
+        closeLine(code, "room-deleted");
         saveDb();
         return sendJson(res, req, 200, { deleted: true, code });
       }
@@ -527,12 +568,6 @@ const server = http.createServer(async (req, res) => {
 
 /* ── websocket signaling ────────────────────────────────────────────── */
 const wss = new WebSocketServer({ noServer: true });
-const lines = new Map(); // code → { sender: ws|null, receiver: ws|null }
-const RELAYED = new Set(["offer", "answer", "ice", "bye"]);
-
-function sendWs(ws, obj) {
-  if (ws.readyState === 1 /* OPEN */) ws.send(JSON.stringify(obj));
-}
 
 function joinLine(ws, msg) {
   const code = String(msg.code || "").toUpperCase();
@@ -544,6 +579,7 @@ function joinLine(ws, msg) {
   const room = db.rooms[code];
   if (!room || Date.now() - room.createdAt > ROOM_TTL_MS) {
     delete db.rooms[code];
+    closeLine(code, "no-room");
     return sendWs(ws, { type: "error", reason: "no-room" });
   }
 
@@ -562,6 +598,7 @@ function joinLine(ws, msg) {
   }
   if (line[role] && line[role] !== ws) {
     try {
+      line[role].profile = null; // detach profile so close handler won't notify peer
       line[role].terminate();
     } catch {
       /* replacing a stale peer */
@@ -571,8 +608,14 @@ function joinLine(ws, msg) {
   ws.profile = { code, role };
 
   const other = role === "sender" ? line.receiver : line.sender;
-  sendWs(ws, { type: "joined", role, peers: other && other.readyState === 1 ? 2 : 1 });
-  if (other && other.readyState === 1) sendWs(other, { type: "peer-joined" });
+  const isPeerOnline = Boolean(other && other.readyState === 1);
+  sendWs(ws, { type: "joined", role, peers: isPeerOnline ? 2 : 1 });
+  if (isPeerOnline) {
+    sendWs(other, { type: "peer-joined", role });
+    if (role === "sender") {
+      sendWs(ws, { type: "peer-ready" });
+    }
+  }
 }
 
 function leaveLine(ws) {
@@ -608,7 +651,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    if (msg && msg.type && RELAYED.has(msg.type)) {
+    if (msg && typeof msg.type === "string" && msg.type !== "join") {
       const line = lines.get(ws.profile.code);
       if (!line) return;
       const peer = ws.profile.role === "sender" ? line.receiver : line.sender;

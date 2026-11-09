@@ -76,15 +76,20 @@ export async function POST(req: Request) {
     code = randomApiCode();
   } while (codeTaken(code));
 
+  const senderToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const room = {
     code,
+    senderToken,
     passwordHash: hash,
     files: staged,
     createdAt: Date.now(),
   };
   store.rooms.set(code, room);
 
-  return NextResponse.json({ room: publicRoom(room) }, { status: 201 });
+  return NextResponse.json(
+    { room: publicRoom(room), sender_token: senderToken },
+    { status: 201 },
+  );
 }
 
 /* GET /api/v1/box/rooms — every live line. */

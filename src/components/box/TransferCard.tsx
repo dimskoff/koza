@@ -85,6 +85,7 @@ export function TransferCard() {
   const movedRef = useRef<Record<string, number>>({});
   const linkCopiedTimer = useRef<number | null>(null);
   const stageRef = useRef<Stage>("collect");
+  const lastUiUpdateRef = useRef(0);
 
   useEffect(() => {
     stageRef.current = stage;
@@ -205,9 +206,11 @@ export function TransferCard() {
 
     /* heartbeat: elapsed clock + smoothed speed display */
     t0Ref.current = Date.now();
+    lastUiUpdateRef.current = 0;
     stopClock();
     tick.current = window.setInterval(() => {
       setElapsed(Date.now() - t0Ref.current);
+      setMoved({ ...movedRef.current });
       const meter = meterRef.current;
       if (meter) {
         setSpeed(meter.bps);
@@ -277,8 +280,12 @@ export function TransferCard() {
           remaining -= take;
         }
         movedRef.current = next;
-        setMoved(next);
         meterRef.current?.push(queued);
+        const now = Date.now();
+        if (now - lastUiUpdateRef.current >= 100) {
+          lastUiUpdateRef.current = now;
+          setMoved({ ...next });
+        }
       },
       onFileQueued: () => {
         /* bytes for this file start flowing */
@@ -286,6 +293,7 @@ export function TransferCard() {
       onFileDone: () => {
         doneCountRef.current += 1;
         setDoneCount(doneCountRef.current);
+        setMoved({ ...movedRef.current });
       },
       onAllDone: () => finish(),
       onError: (reason) => {

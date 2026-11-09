@@ -14,8 +14,9 @@ export async function GET(req: Request) {
   const totalClicks = allLinks.reduce((acc, l) => acc + (l.clicks || 0), 0);
   const activeRooms = [...store.rooms.values()].map(publicRoom);
 
-  const authHeader = req.headers.get("x-koza-key");
-  const isAdmin = Boolean(authHeader);
+  const adminKey = process.env.KOZA_ADMIN_KEY || "";
+  const authHeader = req.headers.get("x-koza-key") || "";
+  const isAdmin = !adminKey || (authHeader && authHeader === adminKey);
 
   return NextResponse.json({
     links_count: allLinks.length,
