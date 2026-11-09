@@ -6,8 +6,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Copy, Terminal } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Kbd } from "@/components/ui/kbd";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { KozaFooter, KozaNav } from "./Sections";
 
 interface Endpoint {
@@ -18,7 +16,6 @@ interface Endpoint {
   request: string;
   response: string;
   status: string;
-  note?: string;
 }
 
 const BASE = "https://koza.click/api/v1";
@@ -42,8 +39,7 @@ const SHORTENER: Endpoint[] = [
     "created_at": "2026-11-09T12:00:00.000Z"
   }
 }`,
-    status: "201 Created",
-    note: "slug & password are optional · 409 if slug is taken",
+    status: "201",
   },
   {
     id: "link-get",
@@ -61,14 +57,13 @@ const SHORTENER: Endpoint[] = [
     "created_at": "2026-11-09T12:00:00.000Z"
   }
 }`,
-    status: "200 OK",
-    note: "url is null when password-locked until unlocked via POST /unlock",
+    status: "200",
   },
   {
     id: "link-unlock",
     method: "POST",
     path: "/links/{slug}/unlock",
-    summary: "Verify password & reveal URL",
+    summary: "Unlock password-protected link",
     request: `curl -X POST ${BASE}/links/gh/unlock \\
   -H "content-type: application/json" \\
   -d '{"password": "secret"}'`,
@@ -76,40 +71,7 @@ const SHORTENER: Endpoint[] = [
   "url": "https://github.com/dimskoff/koza",
   "unlocked": true
 }`,
-    status: "200 OK",
-    note: "403 on wrong password · verified with salted scrypt",
-  },
-  {
-    id: "link-hit",
-    method: "POST",
-    path: "/links/{slug}/hit",
-    summary: "Increment click counter",
-    request: `curl -X POST ${BASE}/links/gh/hit`,
-    response: `{
-  "slug": "gh",
-  "clicks": 15
-}`,
-    status: "200 OK",
-  },
-  {
-    id: "links",
-    method: "GET",
-    path: "/links",
-    summary: "List recent public links",
-    request: `curl ${BASE}/links`,
-    response: `{
-  "count": 1,
-  "links": [
-    {
-      "slug": "gh",
-      "url": null,
-      "password": true,
-      "clicks": 15,
-      "created_at": "2026-11-09T12:00:00.000Z"
-    }
-  ]
-}`,
-    status: "200 OK",
+    status: "200",
   },
 ];
 
@@ -134,14 +96,13 @@ const BOX: Endpoint[] = [
   },
   "sender_token": "9f1c8a...64e2"
 }`,
-    status: "201 Created",
-    note: "keep sender_token to authenticate WebSocket signaling or close the room",
+    status: "201",
   },
   {
     id: "room-get",
     method: "GET",
     path: "/box/rooms/{code}",
-    summary: "Get room manifest & fingerprint",
+    summary: "Get room manifest",
     request: `curl ${BASE}/box/rooms/K7RXT5`,
     response: `{
   "room": {
@@ -149,58 +110,23 @@ const BOX: Endpoint[] = [
     "url": "https://box.koza.click/r/K7RXT5",
     "password": true,
     "fingerprint": "0A7E·BB82·CDC4·D3BB",
-    "files": [{ "name": "archive.zip", "size": 4821900 }],
-    "created_at": "2026-11-09T12:00:00.000Z",
-    "expires_at": "2026-11-09T13:00:00.000Z"
+    "files": [{ "name": "archive.zip", "size": 4821900 }]
   }
 }`,
-    status: "200 OK",
-    note: "404 if the sender closed their tab or the 1h TTL expired",
+    status: "200",
   },
   {
     id: "room-delete",
     method: "DELETE",
     path: "/box/rooms/{code}",
-    summary: "Close a room immediately",
+    summary: "Close a room",
     request: `curl -X DELETE ${BASE}/box/rooms/K7RXT5 \\
   -H "x-koza-token: 9f1c8a...64e2"`,
     response: `{
   "deleted": true,
   "code": "K7RXT5"
 }`,
-    status: "200 OK",
-  },
-  {
-    id: "turn",
-    method: "GET",
-    path: "/turn",
-    summary: "Ephemeral WebRTC ICE / TURN credentials",
-    request: `curl ${BASE}/turn`,
-    response: `{
-  "turn": {
-    "urls": ["turn:koza.click:3478?transport=udp"],
-    "username": "1793871619:koza",
-    "credential": "2/xstFwnlJietQVLjbc9CoctAaA=",
-    "ttl": 3600
-  }
-}`,
-    status: "200 OK",
-  },
-  {
-    id: "stats",
-    method: "GET",
-    path: "/stats",
-    summary: "Node health & live telemetry",
-    request: `curl ${BASE}/stats`,
-    response: `{
-  "status": "ok",
-  "version": "2.2.0",
-  "links_count": 42,
-  "total_clicks": 318,
-  "rooms_count": 1,
-  "active_lines": 1
-}`,
-    status: "200 OK",
+    status: "200",
   },
 ];
 
@@ -304,6 +230,22 @@ function Tinted({ code }: { code: string }) {
   );
 }
 
+function CodeBlock({ label, code }: { label: string; code: string }) {
+  return (
+    <div className="kz-inset overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[var(--kz-hairline)] bg-white/[0.02] px-3 py-1.5">
+        <span className="kz-mono text-[10.5px] uppercase tracking-wider text-[var(--kz-smoke)]">
+          {label}
+        </span>
+        <CopyButton text={code} label={label} />
+      </div>
+      <pre className="kz-mono overflow-x-auto whitespace-pre-wrap break-words px-3.5 py-3 text-[11.5px] leading-[1.7] text-[var(--kz-ash)]">
+        <Tinted code={code} />
+      </pre>
+    </div>
+  );
+}
+
 function EndpointCard({
   ep,
   open,
@@ -315,7 +257,7 @@ function EndpointCard({
 }) {
   return (
     <div
-      className={`kz-edge overflow-hidden transition-colors ${
+      className={`kz-edge overflow-hidden transition-colors duration-200 ${
         open ? "border-[rgba(255,99,99,0.28)]" : ""
       }`}
     >
@@ -333,7 +275,7 @@ function EndpointCard({
           {ep.summary}
         </span>
         <ChevronDown
-          className={`h-4 w-4 shrink-0 text-[var(--kz-smoke)] transition-transform duration-200 ${
+          className={`h-4 w-4 shrink-0 text-[var(--kz-smoke)] transition-transform duration-300 ease-out ${
             open ? "rotate-180 text-[var(--kz-mist)]" : ""
           }`}
         />
@@ -346,54 +288,12 @@ function EndpointCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
             className="overflow-hidden"
           >
-            <div className="border-t border-[var(--kz-hairline)] p-3.5 sm:p-4">
-              <Tabs defaultValue="req" className="w-full">
-                <div className="kz-inset overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-[var(--kz-hairline)] bg-white/[0.02] px-3 py-1.5">
-                    <TabsList className="h-7 bg-transparent p-0 gap-1">
-                      <TabsTrigger
-                        value="req"
-                        className="kz-mono h-6 rounded-md px-2.5 text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-[var(--kz-mist)] text-[var(--kz-smoke)]"
-                      >
-                        cURL
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="res"
-                        className="kz-mono h-6 rounded-md px-2.5 text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-[var(--kz-mist)] text-[var(--kz-smoke)]"
-                      >
-                        {ep.status}
-                      </TabsTrigger>
-                    </TabsList>
-
-                    <TabsContent value="req" className="m-0 flex-none">
-                      <CopyButton text={ep.request} label="cURL request" />
-                    </TabsContent>
-                    <TabsContent value="res" className="m-0 flex-none">
-                      <CopyButton text={ep.response} label="JSON response" />
-                    </TabsContent>
-                  </div>
-
-                  <TabsContent value="req" className="m-0">
-                    <pre className="kz-mono overflow-x-auto whitespace-pre-wrap break-words px-3.5 py-3 text-[11.5px] leading-[1.7] text-[var(--kz-ash)]">
-                      <Tinted code={ep.request} />
-                    </pre>
-                  </TabsContent>
-                  <TabsContent value="res" className="m-0">
-                    <pre className="kz-mono overflow-x-auto whitespace-pre-wrap break-words px-3.5 py-3 text-[11.5px] leading-[1.7] text-[var(--kz-ash)]">
-                      <Tinted code={ep.response} />
-                    </pre>
-                  </TabsContent>
-                </div>
-              </Tabs>
-
-              {ep.note && (
-                <p className="kz-mono mt-2.5 px-1 text-[11px] text-[var(--kz-smoke)]">
-                  {ep.note}
-                </p>
-              )}
+            <div className="space-y-3 border-t border-[var(--kz-hairline)] p-3.5 sm:p-4">
+              <CodeBlock label="request" code={ep.request} />
+              <CodeBlock label={`${ep.status} response`} code={ep.response} />
             </div>
           </motion.div>
         )}
@@ -403,7 +303,8 @@ function EndpointCard({
 }
 
 export function ApiDocs() {
-  const [openId, setOpenId] = useState<string | null>("shorten");
+  const [openKoza, setOpenKoza] = useState<string | null>("shorten");
+  const [openBox, setOpenBox] = useState<string | null>(null);
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
@@ -445,127 +346,48 @@ export function ApiDocs() {
               {BASE}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <Kbd className="hidden sm:inline-flex">v2.2</Kbd>
-            <CopyButton text={BASE} label="Base URL" />
-          </div>
+          <CopyButton text={BASE} label="Base URL" />
         </div>
 
-        {/* Shadcn Tabs for Shortener / Box / Specs */}
-        <Tabs
-          defaultValue="shortener"
-          onValueChange={(v) => {
-            if (v === "shortener") setOpenId("shorten");
-            if (v === "box") setOpenId("room-create");
-          }}
-          className="mt-6 w-full"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <TabsList className="h-9 rounded-xl border border-[var(--kz-hairline)] bg-white/[0.03] p-1">
-              <TabsTrigger
-                value="shortener"
-                className="kz-mono rounded-lg px-3.5 text-[12px] data-[state=active]:bg-white/[0.09] data-[state=active]:text-[var(--kz-mist)] text-[var(--kz-smoke)]"
-              >
-                Shortener
-              </TabsTrigger>
-              <TabsTrigger
-                value="box"
-                className="kz-mono rounded-lg px-3.5 text-[12px] data-[state=active]:bg-white/[0.09] data-[state=active]:text-[var(--kz-mist)] text-[var(--kz-smoke)]"
-              >
-                Box P2P
-              </TabsTrigger>
-              <TabsTrigger
-                value="specs"
-                className="kz-mono rounded-lg px-3.5 text-[12px] data-[state=active]:bg-white/[0.09] data-[state=active]:text-[var(--kz-mist)] text-[var(--kz-smoke)]"
-              >
-                Limits & Specs
-              </TabsTrigger>
-            </TabsList>
-
-            <a
-              href="/api/v1"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="kz-mono hidden text-[11px] text-[var(--kz-smoke)] transition-colors hover:text-[var(--kz-mist)] sm:inline"
-            >
-              raw /api/v1 ↗
-            </a>
+        {/* 01 Shortener */}
+        <section className="mt-8">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <h2 className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+              01 · Shortener
+            </h2>
+            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">koza.click</span>
           </div>
-
-          <TabsContent value="shortener" className="mt-3 space-y-2">
+          <div className="space-y-2">
             {SHORTENER.map((ep) => (
               <EndpointCard
                 key={ep.id}
                 ep={ep}
-                open={openId === ep.id}
-                onToggle={() => setOpenId(openId === ep.id ? null : ep.id)}
+                open={openKoza === ep.id}
+                onToggle={() => setOpenKoza(openKoza === ep.id ? null : ep.id)}
               />
             ))}
-          </TabsContent>
+          </div>
+        </section>
 
-          <TabsContent value="box" className="mt-3 space-y-2">
+        {/* 02 Box */}
+        <section className="mt-8">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <h2 className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
+              02 · Box
+            </h2>
+            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">box.koza.click</span>
+          </div>
+          <div className="space-y-2">
             {BOX.map((ep) => (
               <EndpointCard
                 key={ep.id}
                 ep={ep}
-                open={openId === ep.id}
-                onToggle={() => setOpenId(openId === ep.id ? null : ep.id)}
+                open={openBox === ep.id}
+                onToggle={() => setOpenBox(openBox === ep.id ? null : ep.id)}
               />
             ))}
-          </TabsContent>
-
-          <TabsContent value="specs" className="mt-3">
-            <div className="kz-edge divide-y divide-[var(--kz-hairline)] overflow-hidden">
-              <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-                <div>
-                  <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">
-                    Link storage
-                  </p>
-                  <p className="kz-mono mt-0.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    Persistent atomic store · instant 307 server redirects
-                  </p>
-                </div>
-                <Badge variant="emerald">Persistent</Badge>
-              </div>
-
-              <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-                <div>
-                  <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">
-                    Password protection
-                  </p>
-                  <p className="kz-mono mt-0.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    Salted scrypt digest (`N=16384`) · destination hidden until unlocked
-                  </p>
-                </div>
-                <Badge variant="coral">scrypt</Badge>
-              </div>
-
-              <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-                <div>
-                  <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">
-                    Box room lifecycle
-                  </p>
-                  <p className="kz-mono mt-0.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    Zero disk storage · rooms close on tab exit or after 60 minutes
-                  </p>
-                </div>
-                <Badge variant="secondary">1h TTL</Badge>
-              </div>
-
-              <div className="flex items-center justify-between gap-4 px-4 py-3.5">
-                <div>
-                  <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">
-                    Rate limits
-                  </p>
-                  <p className="kz-mono mt-0.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    30 req/min for link & room creation · 20 req/min for password unlock
-                  </p>
-                </div>
-                <Badge variant="outline">Per IP</Badge>
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>
+          </div>
+        </section>
       </main>
 
       <KozaFooter />

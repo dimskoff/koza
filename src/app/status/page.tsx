@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: MPL-2.0
 import type { Metadata } from "next";
 import { StatusDashboard } from "@/components/koza/StatusDashboard";
 import { KozaFooter, KozaNav } from "@/components/koza/Sections";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
-  title: "koza status — Instance telemetry & control",
-  description: "Live telemetry, link analytics, and active WebRTC lines for this koza node.",
+  title: "Status · koza.click",
+  description: "Live service status for koza.click and box.koza.click.",
 };
 
 export default function StatusPage() {
@@ -27,7 +28,7 @@ export default function StatusPage() {
         }}
       />
       <KozaNav />
-      <main className="flex flex-1 flex-col items-center px-4 py-8">
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <StatusDashboard />
       </main>
       <KozaFooter />

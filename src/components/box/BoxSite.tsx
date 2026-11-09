@@ -24,7 +24,7 @@ export function BoxSite() {
         }}
       />
       <BoxNav />
-      <main className="flex flex-1 flex-col items-center px-4 pt-[13vh] pb-12 sm:pt-[17vh]">
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           Files that travel{" "}
           <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">

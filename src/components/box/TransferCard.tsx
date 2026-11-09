@@ -22,7 +22,6 @@ import {
   ConnectingDots,
   FileGlyph,
   FingerprintHover,
-  KeepTabNote,
   PeerAvatar,
   PeerSpin,
   ScanSweep,
@@ -648,20 +647,10 @@ export function TransferCard() {
                       Waiting for a peer
                     </p>
                   </div>
-                  <div className="kz-mono mt-1.5 h-4 overflow-hidden text-[11px] text-[var(--kz-smoke)]">
-                    <AnimatePresence mode="wait" initial={false}>
-                      <motion.p
-                        key={scanIdx}
-                        initial={{ y: 10, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        exit={{ y: -10, opacity: 0 }}
-                        transition={{ duration: 0.22 }}
-                      >
-                        {SCAN_LINES[scanIdx % SCAN_LINES.length]}
-                      </motion.p>
-                    </AnimatePresence>
-                  </div>
-                  <div className="mt-3">
+                  <p className="kz-mono mt-1.5 text-[11.5px] text-[var(--kz-smoke)]">
+                    share the link above · don&apos;t close this tab
+                  </p>
+                  <div className="mt-3.5">
                     <ScanSweep />
                   </div>
                 </motion.div>
@@ -717,9 +706,11 @@ export function TransferCard() {
             </AnimatePresence>
           </div>
 
-          {/* Integrated bottom strip: keep-tab status beacon + compact Cancel */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
-            <KeepTabNote />
+          {/* Clean bottom bar: staged payload info + compact Cancel */}
+          <div className="mt-4 flex items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
+            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
+              {files.length} file{files.length > 1 ? "s" : ""} · {prettySize(totalBytes)}
+            </span>
             <button
               onClick={cancelTransfer}
               className="kz-mono flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.05] hover:text-[var(--kz-coral)]"

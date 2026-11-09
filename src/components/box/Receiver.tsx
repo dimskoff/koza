@@ -20,7 +20,6 @@ import { BoxFooter, BoxNav } from "./Sections";
 import {
   FileGlyph,
   FingerprintHover,
-  KeepTabNote,
   PeerSpin,
   TransferPanel,
 } from "./visuals";
@@ -312,7 +311,7 @@ export function Receiver({ code }: { code: string }) {
       />
       <BoxNav />
 
-      <main className="flex flex-1 flex-col items-center px-4 pt-[13vh] pb-12 sm:pt-[17vh]">
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           {stage === "receiving" ? (
             <>
@@ -584,14 +583,8 @@ export function Receiver({ code }: { code: string }) {
                       done: movedByIdx[idx] ?? 0,
                     }))}
                     doneLabel="received"
-                    caption={`${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${doneCount} saved`}
+                    caption={`${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${doneCount} saved · don't close tab`}
                   />
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
-                    <KeepTabNote text="stay on this tab — the line closes with it" />
-                    <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
-                      direct stream
-                    </span>
-                  </div>
                 </motion.div>
               )}
 
