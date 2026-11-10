@@ -12,18 +12,20 @@ import { KozaFooter, KozaNav } from "./Sections";
 
 function BoxTransitionSkeleton() {
   return (
-    <div className="kz-edge w-full overflow-hidden p-5 sm:p-6">
-      <div className="mb-4 flex items-center justify-between border-b border-[var(--kz-hairline)] pb-3">
+    <div className="kz-edge w-full overflow-hidden">
+      <div className="flex h-[45px] items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
         <Skeleton className="h-3 w-24 bg-white/[0.08]" />
         <Skeleton className="h-3 w-16 bg-white/[0.05]" />
       </div>
 
-      <div className="kz-inset flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] bg-white/[0.02] px-6 py-9 text-center">
-        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04]">
-          <Zap className="h-5 w-5 animate-pulse text-[var(--kz-coral)]" />
+      <div className="p-5 sm:p-6">
+        <div className="kz-inset flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] bg-white/[0.02] px-6 py-9 text-center">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04]">
+            <Zap className="h-5 w-5 animate-pulse text-[var(--kz-coral)]" />
+          </div>
+          <Skeleton className="mb-2 h-4 w-32 bg-white/[0.08]" />
+          <Skeleton className="h-3.5 w-56 max-w-full bg-white/[0.05]" />
         </div>
-        <Skeleton className="mb-2 h-4 w-32 bg-white/[0.08]" />
-        <Skeleton className="h-3 w-48 max-w-full bg-white/[0.05]" />
       </div>
     </div>
   );
@@ -52,14 +54,14 @@ export function KozaSite() {
       />
       <KozaNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           {isSwitchingToBox ? (
             <motion.h1
               key="box-title"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.18 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
               className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
             >
               Files that travel{" "}
@@ -69,12 +71,8 @@ export function KozaSite() {
               .
             </motion.h1>
           ) : (
-            <motion.h1
+            <h1
               key="url-title"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.18 }}
               className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
             >
               Short links,{" "}
@@ -82,43 +80,35 @@ export function KozaSite() {
                 zero strings
               </span>
               .
-            </motion.h1>
+            </h1>
           )}
         </AnimatePresence>
 
-        <div className="mt-8 w-full max-w-2xl">
-          <AnimatePresence mode="wait">
+        <div className="mt-8 w-full max-w-xl">
+          <AnimatePresence mode="wait" initial={false}>
             {isSwitchingToBox ? (
               <motion.div
                 key="box-skeleton"
-                initial={{ opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15, ease: "easeInOut" }}
               >
                 <BoxTransitionSkeleton />
               </motion.div>
             ) : (
-              <motion.div
-                key="shortener-content"
-                initial={{ opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
+              <div key="shortener-content" className="w-full">
                 <Shortener />
-              </motion.div>
+              </div>
             )}
           </AnimatePresence>
         </div>
 
-        <motion.div
-          animate={{ opacity: isSwitchingToBox ? 0 : 1 }}
-          transition={{ duration: 0.15 }}
-          className="mt-5 w-full max-w-2xl"
-        >
-          <RecentLinks />
-        </motion.div>
+        {!isSwitchingToBox && (
+          <div className="mt-5 w-full max-w-xl">
+            <RecentLinks />
+          </div>
+        )}
       </main>
       <KozaFooter />
     </div>

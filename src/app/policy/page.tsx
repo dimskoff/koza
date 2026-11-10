@@ -11,7 +11,7 @@ export default function PolicyPage() {
   return (
     <div className="kz-root flex min-h-dvh flex-col">
       <KozaNav />
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-4 py-10">
+      <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-4 py-10">
         <h1 className="text-2xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-3xl">
           Data{" "}
           <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">

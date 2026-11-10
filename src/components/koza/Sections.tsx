@@ -7,7 +7,7 @@ import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { getProductUrl, switchTo, useProductTransition } from "../transition";
 
-/* ── Slim nav for koza.click ─────────────────────────────────── */
+/* ── Slim nav for koza.click (unified max-w-xl) ──────────────── */
 export function KozaNav() {
   const transition = useProductTransition();
   const isSwitchingToBox = transition === "box";
@@ -15,20 +15,15 @@ export function KozaNav() {
 
   return (
     <header className="px-4 pt-4">
-      <div className="kz-glass mx-auto flex h-12 w-full max-w-2xl items-center justify-between rounded-[14px] pl-4 pr-2">
+      <div className="kz-glass mx-auto flex h-12 w-full max-w-xl items-center justify-between rounded-[14px] pl-4 pr-2">
         <a
           href={homeUrl}
           className="flex items-center gap-2.5 outline-none"
           aria-label="koza.click home"
         >
-          <motion.div
-            key={isSwitchingToBox ? "box-icon" : "link-icon"}
-            initial={{ scale: 0.85, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.18 }}
-          >
+          <div className="shrink-0">
             {isSwitchingToBox ? <BoxMark size={20} /> : <LinkMark size={20} />}
-          </motion.div>
+          </div>
           <span className="kz-mono flex items-center text-sm text-[var(--kz-mist)]">
             <AnimatePresence initial={false}>
               {isSwitchingToBox && (
@@ -36,7 +31,7 @@ export function KozaNav() {
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: "auto", opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
                   className="inline-block overflow-hidden font-medium text-[var(--kz-coral)]"
                 >
                   box.
@@ -75,11 +70,11 @@ export function KozaNav() {
   );
 }
 
-/* ── One-line footer ─────────────────────────────────────────── */
+/* ── One-line footer (unified max-w-xl) ──────────────────────── */
 export function KozaFooter() {
   return (
     <footer className="kz-hairline-t">
-      <div className="kz-mono mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
+      <div className="kz-mono mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
         <a href="/policy" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
           policy <ArrowUpRight className="h-3 w-3" />
         </a>

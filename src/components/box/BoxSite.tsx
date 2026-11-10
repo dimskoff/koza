@@ -12,7 +12,7 @@ function ShortenerTransitionSkeleton() {
   return (
     <div className="kz-edge w-full overflow-hidden pb-2.5">
       <div className="flex min-h-[56px] items-center justify-between gap-2 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4">
-        <Skeleton className="h-5 w-3/5 bg-white/[0.08]" />
+        <Skeleton className="h-5 w-44 bg-white/[0.08]" />
         <Skeleton className="h-10 w-28 rounded-[9px] bg-white/[0.1]" />
       </div>
       <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
@@ -46,14 +46,14 @@ export function BoxSite() {
       />
       <BoxNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" initial={false}>
           {isSwitchingToUrl ? (
             <motion.h1
               key="url-title"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.18 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
               className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
             >
               Short links,{" "}
@@ -63,12 +63,8 @@ export function BoxSite() {
               .
             </motion.h1>
           ) : (
-            <motion.h1
+            <h1
               key="box-title"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.18 }}
               className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
             >
               Files that travel{" "}
@@ -76,32 +72,26 @@ export function BoxSite() {
                 straight
               </span>
               .
-            </motion.h1>
+            </h1>
           )}
         </AnimatePresence>
 
-        <div className="mt-7 w-full max-w-xl">
-          <AnimatePresence mode="wait">
+        <div className="mt-8 w-full max-w-xl">
+          <AnimatePresence mode="wait" initial={false}>
             {isSwitchingToUrl ? (
               <motion.div
                 key="url-skeleton"
-                initial={{ opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.18, ease: "easeOut" }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15, ease: "easeInOut" }}
               >
                 <ShortenerTransitionSkeleton />
               </motion.div>
             ) : (
-              <motion.div
-                key="transfer-content"
-                initial={{ opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
+              <div key="transfer-content" className="w-full">
                 <TransferCard />
-              </motion.div>
+              </div>
             )}
           </AnimatePresence>
         </div>

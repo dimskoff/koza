@@ -324,7 +324,7 @@ export function ApiDocs() {
       />
       <KozaNav />
 
-      <main className="mx-auto w-full max-w-2xl flex-1 px-4 pt-10 pb-16 sm:pt-14">
+      <main className="mx-auto w-full max-w-xl flex-1 px-4 pt-10 pb-16 sm:pt-14">
         <div className="flex flex-col items-center text-center">
           <h1 className="text-balance text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
             REST{" "}

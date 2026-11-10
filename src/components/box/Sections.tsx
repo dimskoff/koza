@@ -7,7 +7,7 @@ import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { getProductUrl, switchTo, useProductTransition } from "../transition";
 
-/* ── Slim nav for box.koza.click ─────────────────────────────── */
+/* ── Slim nav for box.koza.click (unified max-w-xl) ───────────── */
 export function BoxNav() {
   const transition = useProductTransition();
   const isSwitchingToUrl = transition === "url";
@@ -21,14 +21,9 @@ export function BoxNav() {
           className="flex items-center gap-2.5 outline-none"
           aria-label="box.koza.click home"
         >
-          <motion.div
-            key={isSwitchingToUrl ? "link-icon" : "box-icon"}
-            initial={{ scale: 0.85, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.18 }}
-          >
+          <div className="shrink-0">
             {isSwitchingToUrl ? <LinkMark size={20} /> : <BoxMark size={20} />}
-          </motion.div>
+          </div>
           <span className="kz-mono flex items-center text-sm text-[var(--kz-mist)]">
             <AnimatePresence initial={false}>
               {!isSwitchingToUrl && (
@@ -36,7 +31,7 @@ export function BoxNav() {
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: "auto", opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
                   className="inline-block overflow-hidden font-medium text-[var(--kz-coral)]"
                 >
                   box.
@@ -75,7 +70,7 @@ export function BoxNav() {
   );
 }
 
-/* ── One-line footer for box.koza.click ───────────────────────── */
+/* ── One-line footer for box.koza.click (unified max-w-xl) ─────── */
 export function BoxFooter() {
   return (
     <footer className="kz-hairline-t">
