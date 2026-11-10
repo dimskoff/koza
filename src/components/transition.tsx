@@ -40,6 +40,20 @@ export function getProductUrl(target: ProductMode): string {
   return target === "box" ? "/box" : "/";
 }
 
+export function prefetchProduct(target: ProductMode) {
+  if (typeof document === "undefined") return;
+  const destination = getProductUrl(target);
+  const id = `prefetch-${target}`;
+  if (document.getElementById(id)) return;
+  try {
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "prefetch";
+    link.href = destination;
+    document.head.appendChild(link);
+  } catch {}
+}
+
 export function navigateToProduct(target: ProductMode) {
   if (storeState.isSwitchingTo !== null) return;
 
@@ -64,13 +78,15 @@ export function navigateToProduct(target: ProductMode) {
     return;
   }
 
-  // На главной включаем плавную анимацию скелетона в навбаре и на блоке, затем навигация
+  prefetchProduct(target);
+
+  // На главной включаем скелетон и сразу направляем браузер
   storeState = { isSwitchingTo: target };
   emitChange();
 
   window.setTimeout(() => {
     window.location.href = destination;
-  }, 220);
+  }, 160);
 }
 
 export function switchTo(target: ProductMode) {

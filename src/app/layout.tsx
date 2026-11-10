@@ -1,5 +1,11 @@
-import type { Metadata } from "next";
+// SPDX-License-Identifier: MPL-2.0
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
+
+export const viewport: Viewport = {
+  themeColor: "#050506",
+  colorScheme: "dark",
+};
 
 export const metadata: Metadata = {
   title: "koza.click",
@@ -19,8 +25,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="antialiased">{children}</body>
+    <html
+      lang="en"
+      className="dark bg-[#050506]"
+      style={{ backgroundColor: "#050506", colorScheme: "dark" }}
+      suppressHydrationWarning
+    >
+      <head>
+        <link rel="preconnect" href="https://box.koza.click" />
+        <link rel="preconnect" href="https://koza.click" />
+        <link rel="dns-prefetch" href="https://box.koza.click" />
+        <link rel="dns-prefetch" href="https://koza.click" />
+      </head>
+      <body
+        className="bg-[#050506] text-[#e6e6e6] antialiased"
+        style={{ backgroundColor: "#050506", colorScheme: "dark" }}
+      >
+        {children}
+      </body>
     </html>
   );
 }

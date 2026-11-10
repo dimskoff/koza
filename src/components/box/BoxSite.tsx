@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { Toaster } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProductTransition } from "../transition";
@@ -46,54 +45,36 @@ export function BoxSite() {
       />
       <BoxNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-        <AnimatePresence mode="wait" initial={false}>
+        <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           {isSwitchingToUrl ? (
-            <motion.h1
-              key="url-title"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
-            >
+            <>
               Short links,{" "}
               <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
                 zero strings
               </span>
               .
-            </motion.h1>
+            </>
           ) : (
-            <h1
-              key="box-title"
-              className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
-            >
+            <>
               Files that travel{" "}
               <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
                 straight
               </span>
               .
-            </h1>
+            </>
           )}
-        </AnimatePresence>
+        </h1>
 
         <div className="mt-8 w-full max-w-xl">
-          <AnimatePresence mode="wait" initial={false}>
-            {isSwitchingToUrl ? (
-              <motion.div
-                key="url-skeleton"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15, ease: "easeInOut" }}
-              >
-                <ShortenerTransitionSkeleton />
-              </motion.div>
-            ) : (
-              <div key="transfer-content" className="w-full">
-                <TransferCard />
-              </div>
-            )}
-          </AnimatePresence>
+          {isSwitchingToUrl ? (
+            <div className="w-full animate-in fade-in duration-100">
+              <ShortenerTransitionSkeleton />
+            </div>
+          ) : (
+            <div className="w-full">
+              <TransferCard />
+            </div>
+          )}
         </div>
       </main>
       <BoxFooter />

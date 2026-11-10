@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
-import { getProductUrl, switchTo, useProductTransition } from "../transition";
+import { getProductUrl, prefetchProduct, switchTo, useProductTransition } from "../transition";
 
 /* ── Slim nav for box.koza.click (unified max-w-xl) ───────────── */
 export function BoxNav() {
@@ -25,19 +24,13 @@ export function BoxNav() {
             {isSwitchingToUrl ? <LinkMark size={20} /> : <BoxMark size={20} />}
           </div>
           <span className="kz-mono flex items-center text-sm text-[var(--kz-mist)]">
-            <AnimatePresence initial={false}>
-              {!isSwitchingToUrl && (
-                <motion.span
-                  initial={{ width: 0, opacity: 0 }}
-                  animate={{ width: "auto", opacity: 1 }}
-                  exit={{ width: 0, opacity: 0 }}
-                  transition={{ duration: 0.18, ease: "easeOut" }}
-                  className="inline-block overflow-hidden font-medium text-[var(--kz-coral)]"
-                >
-                  box.
-                </motion.span>
-              )}
-            </AnimatePresence>
+            <span
+              className={`overflow-hidden font-medium text-[var(--kz-coral)] transition-all duration-200 ${
+                !isSwitchingToUrl ? "max-w-[42px] opacity-100" : "max-w-0 opacity-0"
+              }`}
+            >
+              box.
+            </span>
             <span>
               koza<span className="text-[var(--kz-coral)]">.</span>click
             </span>
@@ -48,8 +41,10 @@ export function BoxNav() {
           <button
             type="button"
             onClick={() => switchTo("url")}
+            onMouseEnter={() => prefetchProduct("url")}
+            onFocus={() => prefetchProduct("url")}
             disabled={isSwitchingToUrl}
-            className="kz-neutral-btn flex h-8 cursor-pointer items-center gap-1.5 px-3.5 text-[12px] transition-all disabled:opacity-85"
+            className="kz-neutral-btn flex h-8 w-[76px] cursor-pointer items-center justify-center gap-1.5 text-[12px] transition-all disabled:opacity-85"
             aria-label="Switch to URL shortener"
           >
             {isSwitchingToUrl ? (

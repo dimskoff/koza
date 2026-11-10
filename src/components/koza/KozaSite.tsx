@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { Zap } from "lucide-react";
 import { Toaster } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +12,7 @@ import { KozaFooter, KozaNav } from "./Sections";
 function BoxTransitionSkeleton() {
   return (
     <div className="kz-edge w-full overflow-hidden">
-      <div className="flex h-[45px] items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
+      <div className="flex h-11 items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
         <Skeleton className="h-3 w-24 bg-white/[0.08]" />
         <Skeleton className="h-3 w-16 bg-white/[0.05]" />
       </div>
@@ -54,61 +53,45 @@ export function KozaSite() {
       />
       <KozaNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
-        <AnimatePresence mode="wait" initial={false}>
+        <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
           {isSwitchingToBox ? (
-            <motion.h1
-              key="box-title"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
-            >
+            <>
               Files that travel{" "}
               <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
                 straight
               </span>
               .
-            </motion.h1>
+            </>
           ) : (
-            <h1
-              key="url-title"
-              className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl"
-            >
+            <>
               Short links,{" "}
               <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
                 zero strings
               </span>
               .
-            </h1>
+            </>
           )}
-        </AnimatePresence>
+        </h1>
 
         <div className="mt-8 w-full max-w-xl">
-          <AnimatePresence mode="wait" initial={false}>
-            {isSwitchingToBox ? (
-              <motion.div
-                key="box-skeleton"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.15, ease: "easeInOut" }}
-              >
-                <BoxTransitionSkeleton />
-              </motion.div>
-            ) : (
-              <div key="shortener-content" className="w-full">
-                <Shortener />
-              </div>
-            )}
-          </AnimatePresence>
+          {isSwitchingToBox ? (
+            <div className="w-full animate-in fade-in duration-100">
+              <BoxTransitionSkeleton />
+            </div>
+          ) : (
+            <div className="w-full">
+              <Shortener />
+            </div>
+          )}
         </div>
 
-        {!isSwitchingToBox && (
-          <div className="mt-5 w-full max-w-xl">
-            <RecentLinks />
-          </div>
-        )}
+        <div
+          className={`mt-5 w-full max-w-xl transition-opacity duration-150 ${
+            isSwitchingToBox ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
+        >
+          <RecentLinks />
+        </div>
       </main>
       <KozaFooter />
     </div>
