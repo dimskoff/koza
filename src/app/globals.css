@@ -425,3 +425,43 @@
   animation: kz-veil-wire 0.85s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
   will-change: transform;
 }
+
+/* ── product switch: skeleton → card crossfade (see components/skeletons.tsx) ── */
+.kz-veil {
+  opacity: 0;
+  transition: opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.kz-veil > * {
+  /* opaque base so the card underneath doesn't bleed through mid-fade */
+  background-color: var(--kz-bg, #050506);
+  border-radius: 14px;
+}
+.kz-veil-content {
+  opacity: 1;
+  transition: opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-arrive] .kz-veil {
+  opacity: 1;
+  transition: none;
+}
+html[data-arrive] .kz-veil-content {
+  opacity: 0;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kz-veil,
+  .kz-veil-content {
+    transition: none;
+  }
+}
+/* content under the main card hangs below it without taking layout space,
+   so the headline + card stay exactly centered whether it is empty or full */
+.kz-below-card {
+  position: relative;
+  height: 0;
+}
+.kz-below-card > * {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-/* koza.click — client-side link store & validation */
+/* shortener — client-side link store & validation */
+export { shortUrlOf } from "@/lib/site";
 
 export interface KozaLink {
   id: string;
@@ -184,9 +185,6 @@ export function getServerLinks(): KozaLink[] {
   return EMPTY_LINKS;
 }
 
-export function shortUrlOf(slug: string): string {
-  return `https://koza.click/${slug}`;
-}
 
 export function timeAgo(ts: number): string {
   const diff = Math.max(0, Date.now() - ts);

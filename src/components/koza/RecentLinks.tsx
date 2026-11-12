@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Copy, ExternalLink, Lock, QrCode, Trash2 } from "lucide-react";
@@ -18,6 +19,8 @@ import {
   syncClicks,
   timeAgo,
 } from "./lib";
+
+const SYNC_LIMIT = 20;
 
 function FaviconAvatar({ url }: { url: string }) {
   const host = hostOf(url);
@@ -51,25 +54,32 @@ export function RecentLinks() {
   /* Keyed by slug list so click-count updates do NOT re-trigger the fetch in a loop */
   const slugsKey = links.map((l) => l.slug).join(",");
 
+  /* Refresh click counts for the links THIS browser created — one lookup per
+     slug. There is deliberately no public "list every link" endpoint. */
   useEffect(() => {
     if (!slugsKey) return;
-    let alive = true;
-    fetch("/api/v1/links", { signal: AbortSignal.timeout(6000) })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { links?: { slug: string; clicks: number }[] } | null) => {
-        if (!alive || !d?.links?.length) return;
-        const remote = new Map(d.links.map((l) => [l.slug, l.clicks] as const));
-        const current = getLinksSnapshot();
-        for (const l of current) {
-          const c = remote.get(l.slug);
-          if (typeof c === "number" && c !== l.clicks) {
-            syncClicks(l.id, c);
-          }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 6000);
+    const current = getLinksSnapshot().slice(0, SYNC_LIMIT);
+    void Promise.all(
+      current.map(async (l) => {
+        try {
+          const r = await fetch(`/api/v1/links/${encodeURIComponent(l.slug)}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (!r.ok) return;
+          const d = (await r.json()) as { link?: { clicks?: number } };
+          const c = d.link?.clicks;
+          if (typeof c === "number" && c !== l.clicks) syncClicks(l.id, c);
+        } catch {
+          /* offline or aborted — keep the local count */
         }
-      })
-      .catch(() => {});
+      }),
+    ).finally(() => window.clearTimeout(timer));
     return () => {
-      alive = false;
+      controller.abort();
+      window.clearTimeout(timer);
     };
   }, [slugsKey]);
 
@@ -107,7 +117,7 @@ export function RecentLinks() {
               >
                 <div className="flex items-center gap-1.5">
                   <p className="kz-mono truncate text-[13px] text-[var(--kz-mist)]">
-                    koza.click/<span className="text-[var(--kz-coral)]">{link.slug}</span>
+                    {getSite().host}/<span className="text-[var(--kz-coral)]">{link.slug}</span>
                   </p>
                   {link.locked && (
                     <Lock className="h-3 w-3 shrink-0 text-[var(--kz-coral)]" />
@@ -136,7 +146,7 @@ export function RecentLinks() {
                   onClick={() => {
                     removeLink(link.id);
                     toast("Removed from your list", {
-                      description: "the short link itself stays live on koza.click",
+                      description: `the short link itself stays live on ${getSite().host}`,
                     });
                   }}
                   danger
@@ -177,7 +187,7 @@ export function RecentLinks() {
                 <KozaQr value={shortUrlOf(qrLink.slug)} size={196} />
               </div>
               <p className="kz-mono mt-4 truncate text-center text-xs text-[var(--kz-ash)]">
-                koza.click/<span className="text-[var(--kz-coral)]">{qrLink.slug}</span>
+                {getSite().host}/<span className="text-[var(--kz-coral)]">{qrLink.slug}</span>
               </p>
             </motion.div>
           </motion.div>

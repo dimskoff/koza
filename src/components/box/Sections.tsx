@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { getProductUrl, prefetchProduct, switchTo, useProductTransition } from "../transition";
 
-/* ── Slim nav for box.koza.click (unified max-w-xl) ───────────── */
+/* ── Slim nav for box (unified max-w-xl) ───────────── */
 export function BoxNav() {
   const transition = useProductTransition();
   const isSwitchingToUrl = transition === "url";
@@ -18,7 +19,7 @@ export function BoxNav() {
         <a
           href={homeUrl}
           className="flex items-center gap-2.5 outline-none"
-          aria-label="box.koza.click home"
+          aria-label={`${getSite().boxHost} home`}
         >
           <div className="shrink-0">
             {isSwitchingToUrl ? <LinkMark size={20} /> : <BoxMark size={20} />}
@@ -65,7 +66,7 @@ export function BoxNav() {
   );
 }
 
-/* ── One-line footer for box.koza.click (unified max-w-xl) ─────── */
+/* ── One-line footer for box (unified max-w-xl) ─────── */
 export function BoxFooter() {
   return (
     <footer className="kz-hairline-t">

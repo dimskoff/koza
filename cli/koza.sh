@@ -4,15 +4,15 @@
 # koza cli — talk to any koza server from the terminal.
 #
 #   chmod +x koza.sh
-#   KOZA_HOST=https://koza.click ./koza.sh shorten https://github.com gh
-#   KOZA_HOST=http://localhost:8787 ./koza.sh list
+#   KOZA_URL=https://koza.click ./koza.sh shorten https://github.com gh
+#   KOZA_URL=http://localhost:8787 KOZA_ADMIN_KEY=… ./koza.sh list
 #
-# env: KOZA_HOST       server to talk to      (default https://koza.click)
-#      KOZA_ADMIN_KEY  needed for burn/close  (if the server has one)
+# env: KOZA_URL        server to talk to      (default https://koza.click)
+#      KOZA_ADMIN_KEY  needed for list / burn / close
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-HOST="${KOZA_HOST:-https://koza.click}"
+HOST="${KOZA_URL:-https://koza.click}"
 API="$HOST/api/v1"
 AUTH=()
 [ -n "${KOZA_ADMIN_KEY:-}" ] && AUTH=(-H "x-koza-key: ${KOZA_ADMIN_KEY}")
@@ -33,15 +33,15 @@ usage() {
 koza cli — ${API}
 
   shorten <url> [slug] [password]    mint a short link
-  list                               every link on the server
+  list                               every link on the server (admin)
   info <slug>                        one link — clicks, lock state
-  burn <slug>                        delete a link
+  burn <slug>                        delete a link (admin)
   room [password]                    open a box line, get the code
-  close <code>                       close a box line
+  close <code>                       close a box line (admin)
   stats                              server health, active lines & counts
   open <slug>                        where a link points (server side)
 
-env: KOZA_HOST, KOZA_ADMIN_KEY
+env: KOZA_URL, KOZA_ADMIN_KEY
 EOF
 }
 
@@ -65,7 +65,7 @@ case "$cmd" in
     echo
     ;;
   list)
-    curl -sS "${API}/links"
+    curl -sS "${API}/links" "${AUTH[@]+"${AUTH[@]}"}"
     echo
     ;;
   info)

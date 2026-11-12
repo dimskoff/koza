@@ -2,196 +2,177 @@
 
 # koza
 
-**Modern, privacy-first URL shortener and peer-to-peer file transfer engine.**  
-*Anonymous, end-to-end encrypted, zero logs, zero database bloat.*
+**Privacy-first URL shortener and browser-to-browser file transfer.**
+No accounts, no ads, no analytics. Self-hostable with one `docker compose up`.
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](./LICENSE)
-[![Next.js](https://img.shields.io/badge/Next.js-15%2B-black?logo=next.js)](https://nextjs.org/)
-[![WebRTC](https://img.shields.io/badge/WebRTC-E2E%20Encrypted-blue?logo=webrtc)](https://webrtc.org/)
-[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docker.com)
-[![Dokploy Ready](https://img.shields.io/badge/Dokploy-Supported-8B5CF6)](https://dokploy.com)
 
-[**Live Demo (koza.click)**](https://koza.click) • [**File Transfer (box.koza.click)**](https://box.koza.click) • [**Status & Telemetry**](https://koza.click/status) • [**API Docs**](https://koza.click/docs) • [**Self-Host Guide**](#self-hosting)
+[**koza.click**](https://koza.click) · [**box.koza.click**](https://box.koza.click) · [Status](https://koza.click/status) · [API](https://koza.click/docs)
 
 </div>
 
 ---
 
-## ✨ Features
+## What it does
 
-### 🔗 URL Shortener (`koza.click`)
-- **Zero Strings Attached**: No user accounts, tracking cookies, or ads.
-- **Custom Slugs**: Create memorable handles (e.g. `koza.click/gh`).
-- **Passcode Protection**: Gate links behind salted scrypt password verification.
-- **Click Analytics**: Real-time click counting without harvesting user fingerprints.
-- **Instant QR Codes**: Auto-generated SVG QR codes for offline sharing.
+### 🔗 Short links — `koza.click`
+- No accounts, no tracking cookies. Your own links are listed only in your browser (`localStorage`).
+- Custom slugs (`koza.click/gh`), QR codes, click counter.
+- Optional password per link — salted `scrypt`, unlocked server-side.
+- Abuse guards: private/LAN addresses, URLs with embedded credentials and links back to the
+  service itself are refused; optional domain blocklist and Google Safe Browsing check.
 
-### 📦 Direct P2P Box (`box.koza.click`)
-- **Direct Browser-to-Browser**: Files travel directly between peers via `RTCDataChannel`.
-- **Zero Server Storage**: Your files **never touch the server disk** or cloud storage.
-- **End-to-End Encryption**: DTLS/SRTP encryption is enforced at the WebRTC protocol layer.
-- **No File Size Caps**: Send 10 MB, 10 GB, or 100 GB directly peer-to-peer with chunked backpressure.
-- **Secure Line Tokens**: Auto-generated 6-letter room codes with optional room passwords.
-- **TURN Relay Fallback**: Integrated Coturn relay for strict symmetric NAT networks.
+### 📦 File transfer — `box.koza.click`
+- Drop files, share a 6-character code or link, the receiver downloads them.
+- **Direct mode (preferred):** WebRTC data channel between the two browsers, encrypted with
+  DTLS. Files don't pass through the server.
+- **Relay mode (fallback):** when a direct connection is impossible (strict NAT, VPN, CGNAT)
+  the data is relayed through the koza server over TLS WebSockets. It passes **through server
+  memory in transit and is never written to disk** — but in this mode the server operator is
+  technically able to see it. The UI shows which mode is active.
+- Rooms expire after 1 hour; optional room password (salted `scrypt`).
+- No file size limit in direct mode beyond what the browser can handle.
 
-### ⚡ Instance Telemetry & Admin
-- **Lightweight Status Dashboard**: View active links, live P2P lines, memory RSS, and uptime at `/status`.
-- **Admin Key Authorization**: Protect deletion and full link inspection using `KOZA_ADMIN_KEY`.
-- **Atomic JSON Storage**: Persistent state stored in a single atomic JSON file — zero heavy database dependencies required.
-
----
-
-## 🏗️ Architecture
-
-```
-                                  ┌───────────────────────────┐
-                                  │      Client Browser       │
-                                  └─────────────┬─────────────┘
-                                                │
-                     ┌──────────────────────────┴──────────────────────────┐
-                     │ HTTPS / WebSockets                                  │
-                     ▼                                                     ▼
-           ┌──────────────────┐                                  ┌──────────────────┐
-           │ Next.js Frontend │                                  │  Signaling & API │
-           │   (Port 3000)    │ ────── Proxy (/api/v1) ───────►  │   (Port 8787)    │
-           └──────────────────┘                                  └─────────┬────────┘
-                                                                           │
-                                      ┌────────────────────────────────────┴───┐
-                                      │                                        │
-                                      ▼                                        ▼
-                             ┌────────────────┐                       ┌────────────────┐
-                             │ JSON Storage   │                       │ WebRTC Coturn  │
-                             │ (/data volume) │                       │ (Port 3478)    │
-                             └────────────────┘                       └────────────────┘
-```
+> **Honest threat model:** koza protects you from storage and logging, not from a malicious
+> operator of the instance you use. If that matters, self-host it.
 
 ---
 
-## 🚀 Quickstart (Self-Hosting)
+## Architecture
 
-Deploy your own complete Koza instance in 60 seconds with Docker Compose:
+```
+browser ──HTTPS──► reverse proxy (Traefik / Caddy)
+                     ├── /signal, /api/v1/box/stream/*  ──► api  :8787  (server/server.js)
+                     └── everything else                ──► web  :3000  (Next.js)
+                                                               └─ /api/v1/* proxied to api
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/dimskoff/koza.git
-cd koza
+api: redirects · link + room registry (JSON file in /data) · WebRTC signaling · relay
+web: UI only — holds no state
+coturn (optional): TURN relay for WebRTC behind symmetric NAT
 ```
 
-### 2. Configure Environment
-```bash
-cp .env.example .env
-```
-Edit `.env` to set your desired `KOZA_ADMIN_KEY` and domains:
-```ini
-KOZA_ADMIN_KEY=your_secret_admin_key_here
-KOZA_BASE_URL=https://koza.example.com
-KOZA_HOST=koza.example.com
-KOZA_BOX_HOST=box.koza.example.com
-```
-
-### 3. Start with Docker Compose
-```bash
-docker compose up -d --build
-```
-
-Your service is now running:
-- **Web UI**: `http://localhost:3000`
-- **Backend API & WebSockets**: `http://localhost:8787`
-- **Status Dashboard**: `http://localhost:3000/status`
+- **`server/server.js`** — a single dependency-light Node process (`ws` only).
+  Data: `/data/koza.json`, written atomically.
+- **`src/`** — Next.js 16 / React 19 UI. Domains are read from env **at runtime**, so one
+  image serves any domain.
 
 ---
 
-## 🚢 Production Deployment
+## Self-hosting
 
-### Option A: Dokploy (Recommended for VPS)
-Koza is fully pre-configured for **Dokploy** with Traefik auto-SSL:
+### Docker Compose
 
-1. Open your Dokploy panel (`https://your-dokploy-domain.com`).
-2. Create a new Project (or select existing) → **Add Service** → **Compose**.
-3. Set Source to **GitHub**:
-   - Repository: `dimskoff/koza` (or your fork)
-   - Branch: `main`
-   - Compose Path: `infra/dokploy-compose.yml`
-4. In Environment Variables, configure:
+```bash
+git clone https://github.com/dimskoff/koza.git && cd koza
+cp .env.example .env          # set KOZA_HOST, KOZA_BOX_HOST, KOZA_ADMIN_KEY
+docker compose --profile proxy up -d --build     # with automatic HTTPS via Caddy
+```
+
+Point the DNS A records of both hosts at the server. Add `--profile turn` for the TURN relay
+(open `3478/udp+tcp` and `49160-49200/udp`).
+
+Local development without a domain: leave the defaults (`localhost:3000` /
+`box.localhost:3000`) and run `docker compose up -d --build`. Browsers resolve
+`*.localhost` to `127.0.0.1` automatically.
+
+### Dokploy (Traefik)
+
+1. **Add Service → Compose**, source: this repo, compose path `infra/dokploy-compose.yml`.
+2. Environment:
    ```env
-   KOZA_ADMIN_KEY=generate_with_openssl_rand_hex_24
-   KOZA_BASE_URL=https://koza.yourdomain.com
-   KOZA_HOST=koza.yourdomain.com
-   KOZA_BOX_HOST=box.koza.yourdomain.com
-   KOZA_TURN_SECRET=optional_turn_secret
+   KOZA_HOST=koza.example.com
+   KOZA_BOX_HOST=box.koza.example.com
+   KOZA_ADMIN_KEY=<openssl rand -hex 24>
+   KOZA_TURN_SECRET=<openssl rand -hex 24>
    ```
-5. Click **Deploy**. Dokploy automatically manages builds, connects Traefik, provisions Let's Encrypt certificates, and sets up WebSocket routing.
+3. Deploy. Traefik issues certificates and routes `/signal` + relay streams to the api.
 
-### Option B: Docker Compose with Automatic Caddy HTTPS
+### Without Docker
+
 ```bash
-docker compose --profile proxy up -d --build
+npm install && (cd server && npm install)
+npm run dev:api        # api on :8787
+npm run dev            # web on :3000
 ```
-Point DNS A records for `koza.yourdomain.com` and `box.yourdomain.com` to your server. Caddy provisions Let's Encrypt certificates automatically.
 
----
+### Configuration
 
-## 🛠️ Environment Variables Reference
+All variables are documented in [`.env.example`](./.env.example). The important ones:
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `KOZA_ADMIN_KEY` | *(empty = open)* | Secret key for DELETE operations and admin dashboard view. |
-| `KOZA_BASE_URL` | `http://localhost:3000` | Canonical public origin for generated short URLs. |
-| `KOZA_HOST` | `koza.click` | Main domain for short links. |
-| `KOZA_BOX_HOST` | `box.koza.click` | Subdomain routing directly to Box P2P mode. |
-| `KOZA_DATA_DIR` | `/data` | Path inside container for persistent JSON storage. |
-| `KOZA_ROOM_TTL_MS` | `3600000` (1 hr) | Inactivity expiration time for P2P transfer lines. |
-| `KOZA_TURN_SECRET` | *(empty)* | Coturn `use-auth-secret` HMAC secret for NAT traversal. |
-| `KOZA_TURN_URLS` | *(empty)* | Comma-separated list of TURN endpoints. |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `KOZA_HOST` | `localhost:3000` | Main (short link) host. Everything else is derived from it. |
+| `KOZA_BOX_HOST` | `box.<KOZA_HOST>` | File transfer host. |
+| `KOZA_ADMIN_KEY` | *(empty)* | Enables admin endpoints. **Empty = admin endpoints disabled.** |
+| `KOZA_TRUST_PROXY` | `1` | Proxy hops appending `X-Forwarded-For` (for rate limiting). `0` = ignore header. |
+| `KOZA_CORS_ORIGINS` | base + box URL | Extra origins allowed to call the API from a browser. |
+| `KOZA_BLOCKED_DOMAINS` | — | Comma list of domains that can't be shortened. `/data/blocklist.txt` is also read. |
+| `KOZA_SAFE_BROWSING_KEY` | — | Google Safe Browsing v4 key for destination checks. |
+| `KOZA_TURN_SECRET` | — | coturn `use-auth-secret`; enables TURN credentials. |
+| `KOZA_ROOM_TTL_MS` | `3600000` | Room lifetime. |
 
----
-
-## 💻 Terminal CLI (`cli/koza.sh`)
-
-A standalone bash script to manage short links and P2P lines from the terminal:
+### Backups
 
 ```bash
-chmod +x cli/koza.sh
-
-# Shorten a link
-./cli/koza.sh shorten https://news.ycombinator.com hn
-
-# Shorten with password protection
-./cli/koza.sh shorten https://secret.doc mydoc "supersecret"
-
-# List all links
-./cli/koza.sh list
-
-# Inspect system status
-./cli/koza.sh stats
-
-# Open a P2P transfer room
-./cli/koza.sh room
+docker run --rm -v koza_koza-data:/data -v "$PWD":/backup alpine tar czf /backup/koza.tgz -C /data .
 ```
 
 ---
 
-## 📡 REST & WebSocket API
+## API
 
-Interactive human documentation is live at `/docs`.
+Interactive docs: [`/docs`](https://koza.click/docs). Machine-readable index: `GET /api/v1`.
 
 ```bash
-# Mint a short link
+# create a short link
 curl -X POST https://koza.click/api/v1/shorten \
-  -H "Content-Type: application/json" \
+  -H 'content-type: application/json' \
   -d '{"url": "https://github.com", "slug": "gh"}'
 
-# Open a direct P2P transfer line
+# open a file-transfer room
 curl -X POST https://koza.click/api/v1/box/rooms \
-  -H "Content-Type: application/json" \
+  -H 'content-type: application/json' \
   -d '{"files": [{"name": "archive.zip", "size": 10485760}]}'
+```
 
-# Connect WebRTC Signaling
-# wss://koza.click/signal
+| Endpoint | Auth |
+| --- | --- |
+| `POST /shorten`, `GET /links/{slug}`, `POST /links/{slug}/unlock` | public, rate limited |
+| `POST /box/rooms`, `GET /box/rooms/{code}` | public, rate limited |
+| `DELETE /box/rooms/{code}` | `x-koza-token` (sender) or admin |
+| `GET /links`, `GET /box/rooms`, `DELETE /links/{slug}` | admin (`x-koza-key`) |
+
+Secrets (sender token, room password, admin key) are accepted **only in headers**, never in
+query strings.
+
+### CLI
+
+```bash
+KOZA_URL=https://koza.click ./cli/koza.sh shorten https://news.ycombinator.com hn
+KOZA_URL=https://koza.click KOZA_ADMIN_KEY=… ./cli/koza.sh list
 ```
 
 ---
 
-## 📄 License
+## Development
 
-Distributed under the [Mozilla Public License Version 2.0 (MPL-2.0)](./LICENSE).  
-Maintained by [dimskoff](https://github.com/dimskoff).
+```bash
+npm run check                      # eslint + tsc
+node scripts/test-comprehensive.js # backend integration tests (api must run on :8787)
+```
+
+Project layout:
+
+```
+server/server.js        api: redirects, registry, signaling, relay
+src/app/                Next.js routes (api/v1/[[...path]] is a thin proxy)
+src/components/koza/    shortener UI
+src/components/box/     file transfer UI + WebRTC engine (webrtc.ts)
+src/lib/site.ts         runtime domain config shared by server and client
+infra/                  Caddyfile, Dokploy compose, coturn config
+```
+
+## License
+
+[MPL-2.0](./LICENSE). If you run a modified version, keep its source available
+(`KOZA_REPO_URL` controls the footer link).

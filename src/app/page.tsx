@@ -3,44 +3,36 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { KozaSite } from "@/components/koza/KozaSite";
 import { BoxSite } from "@/components/box/BoxSite";
+import { getSite, isBoxHost } from "@/lib/site";
+
+async function onBoxHost(): Promise<boolean> {
+  const h = await headers();
+  return isBoxHost(h.get("x-forwarded-host") || h.get("host"));
+}
 
 export async function generateMetadata(): Promise<Metadata> {
-  const headerList = await headers();
-  const host = (headerList.get("x-forwarded-host") || headerList.get("host") || "").toLowerCase();
+  const { host, boxHost } = getSite();
 
-  if (host.startsWith("box.")) {
+  if (await onBoxHost()) {
+    const title = `${boxHost} — Files that travel straight`;
+    const description =
+      "Drop files, share a code or link, and bytes move directly between devices — never stored.";
     return {
-      title: "box.koza.click — Files that travel straight",
-      description:
-        "Peer-to-peer file transfer: drop files, share a code or link, and bytes move directly between devices. Encrypted end to end, never stored.",
-      openGraph: {
-        title: "box.koza.click — Files that travel straight",
-        description: "Direct peer-to-peer file transfer with end-to-end encryption.",
-        siteName: "box.koza.click",
-        type: "website",
-      },
+      title,
+      description,
+      openGraph: { title, description, siteName: boxHost, type: "website" },
     };
   }
 
+  const title = `${host} — Short links, zero strings`;
+  const description = `Paste a URL and get a tidy ${host} link. Custom names, passwords and QR codes — no account, no clutter.`;
   return {
-    title: "koza.click — Short links, zero strings",
-    description:
-      "Paste a URL and get a tidy koza.click link. Custom names, passwords and QR codes — no account, no clutter.",
-    openGraph: {
-      title: "koza.click — Short links, zero strings",
-      description: "Anonymous URL shortening with custom names, passwords and QR codes.",
-      siteName: "koza.click",
-      type: "website",
-    },
+    title,
+    description,
+    openGraph: { title, description, siteName: host, type: "website" },
   };
 }
 
 export default async function Home() {
-  const headerList = await headers();
-  const host = (headerList.get("x-forwarded-host") || headerList.get("host") || "").toLowerCase();
-
-  if (host.startsWith("box.")) {
-    return <BoxSite />;
-  }
-  return <KozaSite />;
+  return (await onBoxHost()) ? <BoxSite /> : <KozaSite />;
 }

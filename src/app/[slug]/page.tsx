@@ -1,72 +1,56 @@
 // SPDX-License-Identifier: MPL-2.0
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { LinkGate } from "@/components/koza/LinkGate";
+import { API_URL } from "@/lib/backend";
+import { getSite } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
-const API_BASE =
-  process.env.KOZA_API_URL?.replace(/\/+$/, "") || "http://127.0.0.1:8787";
+type Props = { params: Promise<{ slug: string }> };
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}): Promise<Metadata> {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
+  const { host } = getSite();
   return {
-    title: `${slug} · koza.click`,
-    description: "koza.click short link — no account, no tracking.",
+    title: `${slug} · ${host}`,
+    description: `${host} short link — no account, no tracking.`,
+    robots: { index: false, follow: false },
   };
 }
 
-export default async function SlugPage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
+export default async function SlugPage({ params }: Props) {
   const { slug } = await params;
   const cleanSlug = slug.trim().toLowerCase();
+  const path = `${API_URL}/api/v1/links/${encodeURIComponent(cleanSlug)}`;
 
   let targetUrl: string | null = null;
   let initialState: "locked" | "missing" | undefined;
 
   try {
-    const res = await fetch(
-      `${API_BASE}/api/v1/links/${encodeURIComponent(cleanSlug)}`,
-      {
-        cache: "no-store",
-        signal: AbortSignal.timeout(3500),
-      },
-    );
+    const res = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(3500) });
     if (res.ok) {
-      const data = (await res.json()) as {
-        link?: { url?: string | null; password?: boolean };
-      };
-      if (data?.link) {
-        if (data.link.password) {
-          initialState = "locked";
-        } else if (data.link.url) {
-          targetUrl = data.link.url;
-        }
-      } else {
-        initialState = "missing";
-      }
+      const data = (await res.json()) as { link?: { url?: string | null; password?: boolean } };
+      if (data.link?.password) initialState = "locked";
+      else if (data.link?.url) targetUrl = data.link.url;
+      else initialState = "missing";
     } else if (res.status === 404) {
       initialState = "missing";
     }
   } catch {
-    /* fallback to client probe if local API socket is momentarily busy */
+    /* api momentarily busy — LinkGate probes again from the client */
   }
 
   if (targetUrl) {
-    void fetch(
-      `${API_BASE}/api/v1/links/${encodeURIComponent(cleanSlug)}/hit`,
-      {
-        method: "POST",
-        cache: "no-store",
-      },
-    ).catch(() => {});
+    /* count the click on behalf of the visitor, keeping their IP for rate limiting */
+    const h = await headers();
+    const xff = h.get("x-forwarded-for");
+    void fetch(`${path}/hit`, {
+      method: "POST",
+      cache: "no-store",
+      headers: xff ? { "x-forwarded-for": xff } : undefined,
+    }).catch(() => {});
     redirect(targetUrl);
   }
 

@@ -1,0 +1,4 @@
+# normalize line endings — shell scripts and configs must stay LF inside containers
+* text=auto eol=lf
+*.png binary
+*.ico binary

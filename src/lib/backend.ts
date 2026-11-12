@@ -2,61 +2,60 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-import { NextResponse } from "next/server";
+/* The Next.js app holds no state of its own: every /api/v1/* call is
+ * forwarded verbatim to the koza api service (server/server.js). */
 
-export const UPSTREAM = (process.env.KOZA_API_URL || "").replace(/\/+$/, "") || null;
+export const API_URL = (process.env.KOZA_API_URL || "http://127.0.0.1:8787").replace(/\/+$/, "");
 
-export async function proxyToBackend(
-  req: Request,
-  path: string,
-): Promise<NextResponse | null> {
-  if (!UPSTREAM) return null;
+const FORWARD_REQUEST_HEADERS = [
+  "content-type",
+  "x-koza-token",
+  "x-koza-key",
+  "x-koza-password",
+  "x-forwarded-for",
+  "x-real-ip",
+  "user-agent",
+];
 
+const FORWARD_RESPONSE_HEADERS = [
+  "content-type",
+  "content-length",
+  "content-disposition",
+  "retry-after",
+];
+
+/* Long-lived relay streams must not be cut by the request timeout. */
+const isStreamPath = (path: string) => path.startsWith("/api/v1/box/stream/");
+
+export async function proxyToBackend(req: Request, path: string): Promise<Response> {
   const headers = new Headers();
-  for (const name of [
-    "x-koza-token",
-    "x-koza-key",
-    "x-koza-admin-key",
-    "x-koza-password",
-    "authorization",
-    "x-forwarded-for",
-  ]) {
+  for (const name of FORWARD_REQUEST_HEADERS) {
     const v = req.headers.get(name);
     if (v) headers.set(name, v);
   }
-  const host = req.headers.get("host");
-  if (host) headers.set("x-forwarded-host", host);
-  const proto =
-    req.headers.get("x-forwarded-proto") ||
-    (host && !host.startsWith("localhost") && !host.startsWith("127.") ? "https" : "http");
-  headers.set("x-forwarded-proto", proto);
 
-  let body: string | undefined;
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    body = await req.text();
-    if (body) headers.set("content-type", "application/json");
+  const hasBody = req.method !== "GET" && req.method !== "HEAD";
+  const init: RequestInit & { duplex?: "half" } = {
+    method: req.method,
+    headers,
+    cache: "no-store",
+    redirect: "manual",
+  };
+  if (hasBody) {
+    init.body = req.body;
+    init.duplex = "half";
   }
+  if (!isStreamPath(path)) init.signal = AbortSignal.timeout(10_000);
 
   try {
-    const r = await fetch(`${UPSTREAM}${path}`, {
-      method: req.method,
-      headers,
-      body,
-      cache: "no-store",
-      signal: AbortSignal.timeout(8_000),
-    });
-    const text = await r.text();
-    return new NextResponse(text || "{}", {
-      status: r.status,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store",
-      },
-    });
+    const upstream = await fetch(`${API_URL}${path}`, init);
+    const out = new Headers({ "cache-control": "no-store" });
+    for (const name of FORWARD_RESPONSE_HEADERS) {
+      const v = upstream.headers.get(name);
+      if (v) out.set(name, v);
+    }
+    return new Response(upstream.body, { status: upstream.status, headers: out });
   } catch {
-    return NextResponse.json(
-      { error: "koza backend is not responding" },
-      { status: 502 },
-    );
+    return Response.json({ error: "koza backend is not responding" }, { status: 502 });
   }
 }

@@ -23,26 +23,50 @@ const util = require("node:util");
 const { WebSocketServer } = require("ws");
 
 const scryptAsync = util.promisify(crypto.scrypt);
+const VERSION = require("./package.json").version;
+let wsServerListening = false;
 
 /* ── config ─────────────────────────────────────────────────────────── */
-const PORT = Number(process.env.PORT || 8787);
-const DATA_DIR = process.env.KOZA_DATA_DIR || path.join(__dirname, "data");
-const ADMIN_KEY = process.env.KOZA_ADMIN_KEY || "";
-const FIXED_BASE = (process.env.KOZA_BASE_URL || "").replace(/\/+$/, "");
-const BOX_BASE = (process.env.KOZA_BOX_URL || "https://box.koza.click").replace(/\/+$/, "");
-const ROOM_TTL_MS = Number(process.env.KOZA_ROOM_TTL_MS || 60 * 60 * 1000);
+const env = (name, fallback = "") => (process.env[name] ?? "").trim() || fallback;
+const list = (raw) =>
+  raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const PORT = Number(env("PORT", "8787"));
+const DATA_DIR = env("KOZA_DATA_DIR", path.join(__dirname, "data"));
+const ADMIN_KEY = env("KOZA_ADMIN_KEY");
+const HOST = env("KOZA_HOST", "localhost:3000").toLowerCase();
+const BOX_HOST = env("KOZA_BOX_HOST", `box.${HOST}`).toLowerCase();
+const DEFAULT_PROTO = HOST.startsWith("localhost") || HOST.startsWith("127.") ? "http" : "https";
+const FIXED_BASE = env("KOZA_BASE_URL", `${DEFAULT_PROTO}://${HOST}`).replace(/\/+$/, "");
+const BOX_BASE = env("KOZA_BOX_URL", `${DEFAULT_PROTO}://${BOX_HOST}`).replace(/\/+$/, "");
+const ROOM_TTL_MS = Number(env("KOZA_ROOM_TTL_MS", String(60 * 60 * 1000)));
 const MAX_FILES_PER_ROOM = 12;
 const MAX_LANES_PER_ROLE = 8;
 
-const TURN_SECRET = process.env.KOZA_TURN_SECRET || "";
-const TURN_URLS = (
-  process.env.KOZA_TURN_URLS ||
-  "turn:koza.click:3478?transport=udp,turn:koza.click:3478?transport=tcp"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-const TURN_TTL_S = Number(process.env.KOZA_TURN_TTL_S || 3600);
+/* How many reverse proxies sit in front of this process and append to
+ * X-Forwarded-For (Traefik/Caddy = 1). 0 = ignore the header entirely. */
+const TRUST_PROXY = Math.max(0, Number(env("KOZA_TRUST_PROXY", "1")) || 0);
+
+/* Browser origins allowed to call the API cross-origin. Same-origin calls
+ * through the Next.js proxy never need CORS. */
+const CORS_ORIGINS = new Set(
+  list(env("KOZA_CORS_ORIGINS", `${FIXED_BASE},${BOX_BASE}`)).map((o) => o.replace(/\/+$/, "")),
+);
+
+/* Domains that may not be shortened (comma list) + optional file, one per line. */
+const BLOCKED_DOMAINS_ENV = list(env("KOZA_BLOCKED_DOMAINS")).map((d) => d.toLowerCase());
+const BLOCKLIST_FILE = env("KOZA_BLOCKLIST_FILE", path.join(DATA_DIR, "blocklist.txt"));
+const SAFE_BROWSING_KEY = env("KOZA_SAFE_BROWSING_KEY");
+
+const TURN_SECRET = env("KOZA_TURN_SECRET");
+const TURN_HOST = HOST.split(":")[0];
+const TURN_URLS = list(
+  env("KOZA_TURN_URLS", `turn:${TURN_HOST}:3478?transport=udp,turn:${TURN_HOST}:3478?transport=tcp`),
+);
+const TURN_TTL_S = Number(env("KOZA_TURN_TTL_S", "3600"));
 
 /* ── runtime telemetry ──────────────────────────────────────────────── */
 const telemetry = {
@@ -51,6 +75,7 @@ const telemetry = {
   totalBytesRelayed: 0,
   totalFramesRelayed: 0,
   activeStreams: 0,
+  lastPersistError: null,
 };
 
 /* ── storage: one json file, atomic replace ─────────────────────────── */
@@ -98,7 +123,9 @@ async function flushDbAsync() {
         await fsp.unlink(tmp);
       } catch {}
     }
+    telemetry.lastPersistError = null;
   } catch (err) {
+    telemetry.lastPersistError = err.message;
     console.error("[koza] persist failed:", err.message);
   } finally {
     saveInFlight = false;
@@ -185,40 +212,131 @@ function newSalt() {
   return crypto.randomBytes(8).toString("hex");
 }
 
-function djb2(pw) {
-  let h = 5381;
-  for (let i = 0; i < pw.length; i++) h = ((h << 5) + h + pw.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(16);
-}
-
+/* Constant-time comparison. Both sides are hashed first so that unequal
+ * lengths do not leak through an early return. */
 function safeEqual(a, b) {
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  if (ba.length === 0 || ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
+  const sa = String(a ?? "");
+  const sb = String(b ?? "");
+  if (!sa || !sb) return false;
+  const ha = crypto.createHash("sha256").update(sa).digest();
+  const hb = crypto.createHash("sha256").update(sb).digest();
+  return crypto.timingSafeEqual(ha, hb) && sa.length === sb.length;
 }
 
 async function verifyPass(stored, pw) {
   if (!stored) return true;
-  if (stored.kind === "demo") return safeEqual(stored.hash, djb2(String(pw)));
+  /* Only salted scrypt is accepted. Legacy client-side "demo" digests are
+   * rejected outright — they were brute-forceable 32-bit hashes. */
+  if (stored.kind !== "scrypt" || !stored.salt || !stored.hash) return false;
   const hashed = await hashPass(pw, stored.salt);
   return safeEqual(stored.hash, hashed);
 }
 
+const MAX_URL_LENGTH = 2048;
+
 function normalizeUrl(raw) {
   if (typeof raw !== "string") return null;
   let value = raw.trim();
-  if (!value) return null;
+  if (!value || value.length > MAX_URL_LENGTH) return null;
   if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
   try {
     const u = new URL(value);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     if (!u.hostname || /\s/.test(u.hostname)) return null;
-    if (u.hostname !== "localhost" && !u.hostname.includes(".")) return null;
+    if (!u.hostname.includes(".") && !u.hostname.startsWith("[")) return null;
     return u.toString();
   } catch {
     return null;
   }
+}
+
+/* ── destination policy (anti-abuse) ────────────────────────────────── */
+let blocklistCache = { mtimeMs: -1, domains: [] };
+
+function fileBlocklist() {
+  try {
+    const st = fs.statSync(BLOCKLIST_FILE);
+    if (st.mtimeMs !== blocklistCache.mtimeMs) {
+      const domains = fs
+        .readFileSync(BLOCKLIST_FILE, "utf8")
+        .split(/\r?\n/)
+        .map((l) => l.replace(/#.*/, "").trim().toLowerCase())
+        .filter(Boolean);
+      blocklistCache = { mtimeMs: st.mtimeMs, domains };
+    }
+  } catch {
+    blocklistCache = { mtimeMs: -1, domains: [] };
+  }
+  return blocklistCache.domains;
+}
+
+function domainMatches(hostname, domain) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function isPrivateHost(hostname) {
+  const h = hostname.replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) {
+    return true;
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+    const [a, b] = h.split(".").map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  if (h.includes(":")) {
+    return h === "::1" || h === "::" || /^f[cd]/i.test(h) || /^fe80/i.test(h) || h.startsWith("::ffff:");
+  }
+  return false;
+}
+
+async function safeBrowsingFlagged(url) {
+  if (!SAFE_BROWSING_KEY) return false;
+  try {
+    const r = await fetch(
+      `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${encodeURIComponent(SAFE_BROWSING_KEY)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client: { clientId: "koza", clientVersion: "2.3.0" },
+          threatInfo: {
+            threatTypes: ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
+            platformTypes: ["ANY_PLATFORM"],
+            threatEntryTypes: ["URL"],
+            threatEntries: [{ url }],
+          },
+        }),
+        signal: AbortSignal.timeout(3000),
+      },
+    );
+    if (!r.ok) return false;
+    const data = await r.json();
+    return Array.isArray(data.matches) && data.matches.length > 0;
+  } catch {
+    return false; /* fail open: an outage of the lookup must not break shortening */
+  }
+}
+
+/* Returns an error string if the destination is not allowed, else null. */
+async function destinationError(normalized) {
+  const u = new URL(normalized);
+  const hostname = u.hostname.toLowerCase();
+  if (u.username || u.password) return "links with embedded credentials are not allowed";
+  if (isPrivateHost(hostname)) return "private or local addresses cannot be shortened";
+  const own = [HOST, BOX_HOST].map((h) => h.split(":")[0]);
+  if (own.some((d) => domainMatches(hostname, d))) return "links to this service cannot be shortened";
+  const blocked = [...BLOCKED_DOMAINS_ENV, ...fileBlocklist()];
+  if (blocked.some((d) => domainMatches(hostname, d))) return "this destination is blocked";
+  if (await safeBrowsingFlagged(normalized)) return "this destination is flagged as unsafe";
+  return null;
 }
 
 function computeRoomFingerprint(code, files, createdAt) {
@@ -230,19 +348,29 @@ function computeRoomFingerprint(code, files, createdAt) {
 /* ── rate limiter (in-memory sliding window per IP) ─────────────────── */
 const rateBuckets = new Map();
 
+const MAX_RATE_KEYS = 100_000;
+
+/* The client IP. Proxies APPEND to X-Forwarded-For, so the trustworthy entry
+ * is counted from the right: with TRUST_PROXY=1 it's the last one (written by
+ * Traefik/Caddy). Anything to the left is client-controlled and ignored. */
 function clientIp(req) {
+  const socketIp = req.socket?.remoteAddress || "unknown";
+  if (TRUST_PROXY === 0) return socketIp;
   const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.length > 0) return xff.split(",")[0].trim();
-  return req.socket?.remoteAddress || "unknown";
+  if (typeof xff !== "string" || !xff) return socketIp;
+  const hops = xff
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return hops[Math.max(0, hops.length - TRUST_PROXY)] || socketIp;
 }
 
 function allowRate(req, keyPrefix, maxReqs, windowMs) {
-  const ip = clientIp(req);
-  if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1") return true;
-  const key = `${keyPrefix}:${ip}`;
+  const key = `${keyPrefix}:${clientIp(req)}`;
   const now = Date.now();
   let entry = rateBuckets.get(key);
   if (!entry || now > entry.resetAt) {
+    if (rateBuckets.size >= MAX_RATE_KEYS) rateBuckets.clear(); /* memory guard */
     entry = { count: 1, resetAt: now + windowMs };
     rateBuckets.set(key, entry);
     return true;
@@ -259,20 +387,33 @@ setInterval(() => {
 }, 60_000).unref();
 
 /* ── http helpers ───────────────────────────────────────────────────── */
-function originOf(req) {
-  if (FIXED_BASE) return FIXED_BASE;
-  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
-  const proto = req.headers["x-forwarded-proto"] || "http";
-  return `${proto}://${host}`;
+/* Public origins come from config only — never from request headers, so a
+ * forged Host / X-Forwarded-Host cannot change generated links. */
+function originOf() {
+  return FIXED_BASE;
 }
 
-function boxOriginOf(req) {
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "");
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  if (host.startsWith("box.")) return `${proto}://${host}`;
-  if (host.includes("localhost") || host.startsWith("127.")) return `${proto}://${host}`;
+function boxOriginOf() {
   return BOX_BASE;
 }
+
+/* CORS: reflect only allow-listed origins; everyone else gets no CORS headers
+ * (curl & server-to-server callers don't need them). */
+function corsHeaders(req) {
+  const origin = String(req.headers.origin || "").replace(/\/+$/, "");
+  if (!origin || !CORS_ORIGINS.has(origin)) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-headers": "content-type, x-koza-key, x-koza-token, x-koza-password",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    vary: "Origin",
+  };
+}
+
+const SECURITY_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
 
 function sendJson(res, req, status, obj) {
   if (res.headersSent) return;
@@ -280,11 +421,9 @@ function sendJson(res, req, status, obj) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
-    "access-control-allow-origin": req.headers.origin || "*",
-    "access-control-allow-headers":
-      "content-type, x-koza-key, x-koza-admin-key, x-koza-token, x-koza-password",
-    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     "cache-control": "no-store",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
   });
   res.end(body);
 }
@@ -313,8 +452,9 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
+/* Admin operations are DENIED when no admin key is configured. */
 function authorized(req) {
-  if (!ADMIN_KEY) return true;
+  if (!ADMIN_KEY) return false;
   const key = req.headers["x-koza-key"] || req.headers["x-koza-admin-key"] || "";
   return safeEqual(String(key), ADMIN_KEY);
 }
@@ -436,7 +576,8 @@ async function handleDirectStream(req, res, code, fileIdx, url) {
   const key = `${code}:${fileIdx}`;
 
   if (req.method === "POST" || req.method === "PUT") {
-    const token = req.headers["x-koza-token"] || url.searchParams.get("token") || "";
+    /* secrets travel in headers only — query strings end up in proxy logs */
+    const token = req.headers["x-koza-token"] || "";
     if (!safeEqual(room.senderToken, String(token))) {
       return sendJson(res, req, 401, { error: "invalid sender token" });
     }
@@ -464,7 +605,10 @@ async function handleDirectStream(req, res, code, fileIdx, url) {
   }
 
   if (req.method === "GET") {
-    const pw = url.searchParams.get("password") || req.headers["x-koza-password"] || "";
+    if (!allowRate(req, "stream", 60, 60_000)) {
+      return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
+    }
+    const pw = req.headers["x-koza-password"] || "";
     if (room.password && !(await verifyPass(room.password, String(pw)))) {
       return sendJson(res, req, 403, { error: "wrong password" });
     }
@@ -506,8 +650,9 @@ function bridgeHttpStreams(key, slot, fileMeta) {
   const headers = {
     "content-type": "application/octet-stream",
     "content-disposition": `attachment; filename*=UTF-8''${safeName}`,
-    "access-control-allow-origin": "*",
     "cache-control": "no-store",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(slot.receiverReq),
   };
   if (fileMeta.size > 0) headers["content-length"] = String(fileMeta.size);
 
@@ -539,7 +684,7 @@ function bridgeHttpStreams(key, slot, fileMeta) {
         const body = JSON.stringify({ ok: true, bytes: moved });
         senderRes.writeHead(200, {
           "content-type": "application/json",
-          "access-control-allow-origin": "*",
+          ...corsHeaders(senderReq),
         });
         senderRes.end(body);
       }
@@ -565,18 +710,18 @@ function bridgeHttpStreams(key, slot, fileMeta) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   const pathname = url.pathname.replace(/\/+$/, "") || "/";
-  const origin = originOf(req);
+  const origin = originOf();
   let m;
 
   if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "access-control-allow-origin": req.headers.origin || "*",
-      "access-control-allow-headers":
-        "content-type, x-koza-key, x-koza-admin-key, x-koza-token, x-koza-password",
-      "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "access-control-max-age": "86400",
-    });
+    const cors = corsHeaders(req);
+    res.writeHead(204, cors["access-control-allow-origin"] ? { ...cors, "access-control-max-age": "86400" } : {});
     return res.end();
+  }
+
+  if (pathname === "/healthz") {
+    res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
+    return res.end("ok");
   }
 
   try {
@@ -604,9 +749,10 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      const storageOk = !telemetry.lastPersistError;
       const stats = {
-        status: "operational",
-        version: "2.2.0",
+        status: storageOk ? "operational" : "degraded",
+        version: VERSION,
         server_time: new Date().toISOString(),
         node_version: process.version,
         platform: `${process.platform}/${process.arch}`,
@@ -633,16 +779,25 @@ const server = http.createServer(async (req, res) => {
           total_frames_relayed: telemetry.totalFramesRelayed,
           active_streams: telemetry.activeStreams,
         },
+        /* Only facts this process can actually observe. If it answers, the
+         * HTTP API and the WebSocket server (same process) are up. */
         services: {
-          http_api: { ok: true, status: "operational", label: "Edge redirect & room registry" },
-          ws_signaling: { ok: true, status: "operational", label: "Real-time WebRTC SDP & ICE broker" },
-          turbo_relay: { ok: true, status: "operational", label: "Zero-copy TLS :443 binary stream relay" },
+          http_api: { ok: true, status: "operational", label: "Redirects & room registry" },
+          ws_signaling: {
+            ok: wsServerListening,
+            status: wsServerListening ? "operational" : "down",
+            label: "WebRTC signaling & WebSocket relay",
+          },
           turn_ice: {
             ok: true,
-            status: TURN_SECRET ? "operational" : "stun-only",
-            label: TURN_SECRET ? "NAT traversal & TURN-TCP relay" : "STUN direct traversal",
+            status: TURN_SECRET ? "configured" : "stun-only",
+            label: TURN_SECRET ? "TURN credentials issued (coturn not probed)" : "STUN only",
           },
-          storage: { ok: true, status: "operational", label: "Atomic link store · zero-disk file policy" },
+          storage: {
+            ok: storageOk,
+            status: storageOk ? "operational" : "write-failing",
+            label: "JSON link store",
+          },
         },
       };
       return sendJson(res, req, 200, stats);
@@ -652,7 +807,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/v1" && req.method === "GET") {
       return sendJson(res, req, 200, {
         name: "koza api",
-        version: "v2.2",
+        version: VERSION,
         base_url: `${origin}/api/v1`,
         description:
           "Short links and hybrid P2P + Turbo binary file lines. Zero disk storage.",
@@ -660,20 +815,22 @@ const server = http.createServer(async (req, res) => {
         endpoints: {
           shortener: {
             "POST /shorten": "create a short link — { url, slug?, password? }",
-            "GET /links": "list links on this server",
+            "GET /links": "list all links (admin: x-koza-key)",
             "GET /links/{slug}": "look up one link, clicks included",
             "POST /links/{slug}/hit": "count a click",
             "POST /links/{slug}/unlock": "trade a password for the destination url",
-            "DELETE /links/{slug}": "burn a link (x-koza-key when admin key is set)",
+            "DELETE /links/{slug}": "delete a link (admin: x-koza-key)",
           },
           box: {
             "POST /box/rooms":
-              "open a direct line — { password?, files? } → { room, sender_token }",
+              "open a line — { password?, files? } → { room, sender_token }",
+            "GET /box/rooms": "list live rooms (admin: x-koza-key)",
             "GET /box/rooms/{code}": "inspect a line: staged files, lock state, fingerprint, expiry",
-            "DELETE /box/rooms/{code}": "close the line early",
+            "DELETE /box/rooms/{code}": "close the line early (x-koza-token or admin key)",
             "GET /turn": "short-lived turn credentials for the webrtc handshake",
-            "WS /signal": "hybrid WebRTC signaling + binary WebSocket turbo relay",
-            "POST|GET /signal/stream/{code}/{i}": "direct RAM cut-through HTTP stream",
+            "WS /signal": "WebRTC signaling + WebSocket relay fallback",
+            "POST|GET /signal/stream/{code}/{i}":
+              "HTTP relay stream (x-koza-token / x-koza-password headers)",
           },
         },
       });
@@ -688,6 +845,10 @@ const server = http.createServer(async (req, res) => {
       const normalized = normalizeUrl(body.url);
       if (!normalized) {
         return sendJson(res, req, 400, { error: "invalid url — try https://example.com" });
+      }
+      const policyError = await destinationError(normalized);
+      if (policyError) {
+        return sendJson(res, req, 422, { error: policyError });
       }
 
       let slug = "";
@@ -730,6 +891,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/v1/links" && req.method === "GET") {
+      if (!authorized(req)) return sendJson(res, req, 401, { error: "admin key required" });
       const links = Object.values(db.links)
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, 100)
@@ -756,6 +918,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if ((m = pathname.match(/^\/api\/v1\/links\/([^/]+)\/hit$/)) && req.method === "POST") {
+      if (!allowRate(req, "hit", 30, 60_000)) {
+        return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
+      }
       const slug = decodeURIComponent(m[1]).toLowerCase();
       const link = db.links[slug];
       if (!link) return sendJson(res, req, 404, { error: "no such link" });
@@ -809,8 +974,10 @@ const server = http.createServer(async (req, res) => {
         }
         const salt = newSalt();
         password = { kind: "scrypt", salt, hash: await hashPass(pw, salt) };
-      } else if (typeof body.passwordHash === "string" && body.passwordHash) {
-        password = { kind: "demo", salt: "", hash: body.passwordHash };
+      } else if (body.passwordHash) {
+        return sendJson(res, req, 400, {
+          error: "passwordHash is no longer supported — send { password } instead",
+        });
       }
 
       let code = "";
@@ -837,6 +1004,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/v1/box/rooms" && req.method === "GET") {
+      if (!authorized(req)) return sendJson(res, req, 401, { error: "admin key required" });
       pruneRooms();
       const rooms = Object.values(db.rooms)
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -850,6 +1018,9 @@ const server = http.createServer(async (req, res) => {
       const room = db.rooms[code];
 
       if (req.method === "GET") {
+        if (!allowRate(req, "room-lookup", 60, 60_000)) {
+          return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
+        }
         pruneRooms();
         if (!room) return sendJson(res, req, 404, { error: "no such room (or it expired)" });
         return sendJson(res, req, 200, { room: publicRoom(room, req) });
@@ -872,6 +1043,9 @@ const server = http.createServer(async (req, res) => {
 
     /* ── turn credentials (coturn use-auth-secret) ── */
     if (pathname === "/api/v1/turn" && req.method === "GET") {
+      if (!allowRate(req, "turn", 30, 60_000)) {
+        return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
+      }
       if (!TURN_SECRET) {
         return sendJson(res, req, 200, { turn: null, note: "no turn on this server — stun only" });
       }
@@ -895,9 +1069,11 @@ const server = http.createServer(async (req, res) => {
             locked: true,
           });
         }
-        link.clicks += 1;
-        saveDb();
-        res.writeHead(302, { location: link.url, "cache-control": "no-store" });
+        if (allowRate(req, "hit", 30, 60_000)) {
+          link.clicks += 1;
+          saveDb();
+        }
+        res.writeHead(302, { location: link.url, "cache-control": "no-store", ...SECURITY_HEADERS });
         return res.end();
       }
     }
@@ -920,6 +1096,14 @@ const wss = new WebSocketServer({
 });
 
 async function joinLine(ws, msg) {
+  /* brute-force guard for room passwords / sender tokens over the socket */
+  if (!allowRate(ws._req, "ws-join", 90, 60_000)) {
+    sendWs(ws, { type: "error", reason: "rate-limited" });
+    try {
+      ws.close(1008, "rate-limited");
+    } catch {}
+    return;
+  }
   const code = String(msg.code || "").toUpperCase();
   const role = msg.role === "sender" ? "sender" : msg.role === "receiver" ? "receiver" : null;
   const isLane = msg.type === "join-lane" || Boolean(msg.lane);
@@ -1034,6 +1218,7 @@ function leaveLine(ws) {
 wss.on("connection", (ws, req) => {
   ws.isAlive = true;
   ws.profile = null;
+  ws._req = { headers: req?.headers || {}, socket: req?.socket };
   ws._pauseTimer = null;
   ws._pauseTimeout = null;
   req?.socket?.setNoDelay?.(true);
@@ -1164,6 +1349,10 @@ setInterval(() => {
 server.on("upgrade", (req, socket, head) => {
   const { pathname } = new URL(req.url, "http://localhost");
   if (pathname !== "/signal") return socket.destroy();
+  if (!allowRate(req, "ws-connect", 120, 60_000)) {
+    socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
+    return socket.destroy();
+  }
   socket.setNoDelay(true);
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
@@ -1171,8 +1360,10 @@ server.on("upgrade", (req, socket, head) => {
 /* ── boot ───────────────────────────────────────────────────────────── */
 loadDb();
 server.listen(PORT, () => {
-  console.log(`[koza v2.2] listening on :${PORT}  ·  data: ${DATA_FILE}`);
-  if (!ADMIN_KEY) console.log("[koza] KOZA_ADMIN_KEY empty — DELETE endpoints are open");
+  wsServerListening = true;
+  console.log(`[koza v${VERSION}] listening on :${PORT}  ·  data: ${DATA_FILE}`);
+  console.log(`[koza] public: ${FIXED_BASE}  ·  box: ${BOX_BASE}  ·  trust-proxy hops: ${TRUST_PROXY}`);
+  if (!ADMIN_KEY) console.warn("[koza] KOZA_ADMIN_KEY empty — admin endpoints are disabled");
 });
 
 process.on("SIGTERM", () => {

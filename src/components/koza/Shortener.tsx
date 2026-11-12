@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -53,7 +54,7 @@ export function Shortener() {
     : taken
       ? { kind: "error" as const, text: "Already in your links" }
       : slugTrimmed.length > 0
-        ? { kind: "ok" as const, text: "koza.click name available" }
+        ? { kind: "ok" as const, text: `${getSite().host} name available` }
         : null;
 
   /* mint the link on the koza backend — persistent, redirects for everyone */
@@ -144,6 +145,18 @@ export function Shortener() {
     }
   }, [phase, destination, slugTrimmed, baseError, taken, passwordOn, password]);
 
+  const reset = () => {
+    setResult(null);
+    setDestination("");
+    setSlug("");
+    setPassword("");
+    setPasswordOn(false);
+    setAdvancedOpen(false);
+    setPhase("idle");
+    setCopied(false);
+    window.setTimeout(() => inputRef.current?.focus(), 60);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -179,18 +192,6 @@ export function Shortener() {
   const openResult = () => {
     if (!result) return;
     window.open(shortUrlOf(result.slug), "_blank", "noopener,noreferrer");
-  };
-
-  const reset = () => {
-    setResult(null);
-    setDestination("");
-    setSlug("");
-    setPassword("");
-    setPasswordOn(false);
-    setAdvancedOpen(false);
-    setPhase("idle");
-    setCopied(false);
-    window.setTimeout(() => inputRef.current?.focus(), 60);
   };
 
   const copy = async (text: string, label: string) => {
@@ -325,7 +326,7 @@ export function Shortener() {
                     <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--kz-coral)]" />
                   )}
                   <span className="kz-mono truncate text-[16px] font-medium tracking-tight">
-                    <span className="text-[var(--kz-ash)]">koza.click/</span>
+                    <span className="text-[var(--kz-ash)]">{getSite().host}/</span>
                     <span className="text-[var(--kz-coral)]">
                       {result.slug.split("").map((ch, i) => (
                         <motion.span
@@ -455,7 +456,7 @@ export function Shortener() {
                       className="kz-mono shrink-0 text-[13px] text-[var(--kz-smoke)]"
                       aria-hidden="true"
                     >
-                      koza.click/
+                      {getSite().host}/
                     </span>
                     <input
                       id="kz-slug"
@@ -566,7 +567,7 @@ export function Shortener() {
                 <KozaQr value={shortUrlOf(result.slug)} size={196} />
               </div>
               <p className="kz-mono mt-4 truncate text-center text-xs text-[var(--kz-ash)]">
-                koza.click/<span className="text-[var(--kz-coral)]">{result.slug}</span>
+                {getSite().host}/<span className="text-[var(--kz-coral)]">{result.slug}</span>
               </p>
               <button
                 onClick={() => copy(shortUrlOf(result.slug), "Link")}

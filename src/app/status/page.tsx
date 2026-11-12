@@ -1,32 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
+import { KozaToaster } from "@/components/KozaToaster";
 import type { Metadata } from "next";
 import { StatusDashboard } from "@/components/koza/StatusDashboard";
 import { KozaFooter, KozaNav } from "@/components/koza/Sections";
-import { Toaster } from "sonner";
+import { getSite } from "@/lib/site";
 
-export const metadata: Metadata = {
-  title: "Status · koza.click",
-  description: "Live service status for koza.click and box.koza.click.",
-};
+export function generateMetadata(): Metadata {
+  const { host, boxHost } = getSite();
+  return {
+    title: `Status · ${host}`,
+    description: `Live service status for ${host} and ${boxHost}.`,
+  };
+}
 
 export default function StatusPage() {
   return (
     <div className="kz-root flex min-h-dvh flex-col">
-      <Toaster
-        position="bottom-right"
-        gap={8}
-        toastOptions={{
-          style: {
-            background: "rgba(17,18,20,0.92)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "#e6e6e6",
-            borderRadius: "12px",
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "13px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-          },
-        }}
-      />
+      <KozaToaster />
       <KozaNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <StatusDashboard />

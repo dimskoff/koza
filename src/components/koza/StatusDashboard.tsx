@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +13,7 @@ interface ServiceHealth {
 }
 
 interface StatsData {
+  status?: string;
   uptime_seconds?: number;
   links_count?: number;
   redirects?: number;
@@ -21,8 +23,7 @@ interface StatsData {
   services?: {
     http_api?: ServiceHealth | string;
     ws_signaling?: ServiceHealth | string;
-    ws_signal?: ServiceHealth | string;
-    turbo_relay?: ServiceHealth | string;
+    storage?: ServiceHealth | string;
   };
 }
 
@@ -78,23 +79,23 @@ export function StatusDashboard() {
   const services = [
     {
       id: "koza",
-      name: "koza.click",
+      name: getSite().host,
       desc: "Short links & redirects",
       ok: isServiceOk(stats?.services?.http_api),
       mark: <LinkMark size={16} />,
     },
     {
       id: "box",
-      name: "box.koza.click",
+      name: getSite().boxHost,
       desc: "Direct peer-to-peer file rooms",
-      ok: isServiceOk(stats?.services?.turbo_relay),
+      ok: isServiceOk(stats?.services?.ws_signaling),
       mark: <BoxMark size={16} />,
     },
     {
       id: "signal",
       name: "API & Signaling",
-      desc: "REST endpoints & WebRTC broker",
-      ok: isServiceOk(stats?.services?.ws_signaling ?? stats?.services?.ws_signal),
+      desc: "REST API & link storage",
+      ok: isServiceOk(stats?.services?.http_api) && isServiceOk(stats?.services?.storage),
       mark: <CubeMark size={15} />,
     },
   ];
@@ -108,11 +109,11 @@ export function StatusDashboard() {
   return (
     <div className="w-full max-w-xl">
       <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
-        {online === false ? (
+        {online === false || stats?.status === "degraded" ? (
           <>
-            Service{" "}
+            {online === false ? "Service" : "Partial"}{" "}
             <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
-              unreachable
+              {online === false ? "unreachable" : "outage"}
             </span>
             .
           </>

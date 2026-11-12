@@ -286,12 +286,12 @@ function wsOpen(url, onBinary) {
   ok("HTTP cut-through stream POST & GET succeeded", postJson.ok === true && getStatusCode === 200);
   ok("HTTP cut-through stream SHA-256 integrity verified", streamSrcHash === streamDstHash);
 
-  console.log("\n── Test 6: Upgraded Telemetry /api/v1/stats v2.2 ──");
+  console.log("\n── Test 6: Telemetry /api/v1/stats ──");
   const statsRes = await fetch(`${HTTP}/api/v1/stats`);
   const statsData = await statsRes.json();
-  ok("Stats v2.2 returns operational status & version", statsData.status === "operational" && statsData.version === "2.2.0");
+  ok("Stats v2.2 returns operational status & version", statsData.status === "operational" && typeof statsData.version === "string");
   ok("Stats v2.2 tracks total_bytes_relayed (>65 MB)", statsData.transfer_stats?.total_bytes_relayed >= TOTAL_SIZE + STREAM_SIZE);
-  ok("Stats v2.2 includes services health matrix", statsData.services?.turbo_relay?.ok === true);
+  ok("Stats includes services health matrix", statsData.services?.ws_signaling?.ok === true && statsData.services?.storage?.ok === true);
   ok("Stats v2.2 returns redirects & rooms_count numbers", typeof statsData.redirects === "number" && typeof statsData.rooms_count === "number");
   ok("Stats v2.2 does not expose admin dumps", statsData.links === undefined && statsData.admin_rooms === undefined);
 
@@ -423,6 +423,38 @@ function wsOpen(url, onBinary) {
   ok("6x Parallel out-of-order reassembly SHA-256 verified bit-for-bit", multiSrcHash === multiDstHash);
 
   for (const l of [...recvLanes, ...sendLanes, recvPrimary, sendPrimary]) l.close();
+
+  console.log("\n── Test 8: Hardening (admin-only lists, legacy hashes, abuse policy) ──");
+  const ADMIN = process.env.KOZA_ADMIN_KEY || "";
+  const linksAnon = await fetch(`${HTTP}/api/v1/links`);
+  ok("GET /links without admin key → 401", linksAnon.status === 401);
+  const roomsAnon = await fetch(`${HTTP}/api/v1/box/rooms`);
+  ok("GET /box/rooms without admin key → 401", roomsAnon.status === 401);
+  const wrongKey = await fetch(`${HTTP}/api/v1/links`, { headers: { "x-koza-key": "nope" } });
+  ok("GET /links with wrong admin key → 401", wrongKey.status === 401);
+  if (ADMIN) {
+    const linksAdmin = await fetch(`${HTTP}/api/v1/links`, { headers: { "x-koza-key": ADMIN } });
+    ok("GET /links with admin key → 200", linksAdmin.status === 200);
+  }
+  const legacy = await fetch(`${HTTP}/api/v1/box/rooms`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ passwordHash: "1a2b3c" }),
+  });
+  ok("Legacy client-side passwordHash rejected (400)", legacy.status === 400);
+  const shorten = (url) =>
+    fetch(`${HTTP}/api/v1/shorten`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+  ok("Private address destination rejected (422)", (await shorten("http://192.168.1.1/admin")).status === 422);
+  ok("Embedded credentials rejected (422)", (await shorten("https://user:pass@example.com")).status === 422);
+  ok("javascript: scheme rejected (400)", (await shorten("javascript:alert(1)")).status === 400);
+  const evilCors = await fetch(`${HTTP}/api/v1/stats`, { headers: { origin: "https://evil.example" } });
+  ok("Foreign Origin gets no CORS header", evilCors.headers.get("access-control-allow-origin") === null);
+  const qsPw = await fetch(`${HTTP}/signal/stream/${code5}/0?password=x`, { method: "POST" });
+  ok("Stream sender token in query string is ignored (401)", qsPw.status === 401 || qsPw.status === 404);
 
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -27,7 +28,8 @@ import {
   ScanSweep,
   TransferPanel,
 } from "./visuals";
-import { BoxSender, computeTransferFingerprint } from "./webrtc";
+import { BoxSender, computeTransferFingerprint, type TransportMode } from "./webrtc";
+import { TransportBadge } from "./TransportBadge";
 import {
   type BoxFile,
   fmtDuration,
@@ -76,6 +78,7 @@ export function TransferCard() {
   const [scanIdx, setScanIdx] = useState(0);
   const [linkCopied, setLinkCopied] = useState(false);
   const [errorReason, setErrorReason] = useState("");
+  const [transport, setTransport] = useState<TransportMode | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const engineRef = useRef<BoxSender | null>(null);
@@ -290,7 +293,9 @@ export function TransferCard() {
           setStage("error");
         }
       },
-      onChannelOpen: () => {
+      onTransportChange: (mode) => setTransport(mode),
+      onChannelOpen: (mode) => {
+        setTransport(mode);
         transferStartRef.current = Date.now();
         meterRef.current = new SpeedMeter();
         setStage("moving");
@@ -428,6 +433,7 @@ export function TransferCard() {
         </span>
 
         <span className="flex items-center gap-3">
+          {(stage === "moving" || stage === "done") && <TransportBadge mode={transport} />}
           {inRoom && fingerprint && <FingerprintHover fingerprint={fingerprint} />}
           {inRoom && (
             <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
@@ -580,7 +586,7 @@ export function TransferCard() {
       {/* ── ROOM (waiting / handshake / moving) ─────────────────── */}
       {inRoom && (
         <div className="p-5 sm:p-6">
-          {/* Invite link bar — sleek inline bar matching koza.click shortener */}
+          {/* Invite link bar — sleek inline bar matching the shortener */}
           <AnimatePresence initial={false}>
             {(stage === "waiting" || stage === "handshake") && (
               <motion.div
@@ -597,7 +603,7 @@ export function TransferCard() {
                     className="kz-mono min-w-0 flex-1 cursor-pointer truncate text-left text-[15px] font-medium tracking-tight"
                     title="Click to copy link"
                   >
-                    <span className="text-[var(--kz-ash)]">box.koza.click/r/</span>
+                    <span className="text-[var(--kz-ash)]">{getSite().boxHost}/r/</span>
                     <span className="text-[var(--kz-coral)]">{code}</span>
                   </button>
                   <div className="flex shrink-0 items-center gap-1">
@@ -829,7 +835,7 @@ export function TransferCard() {
                 <KozaQr value={invite} size={180} />
               </div>
               <p className="kz-mono mt-4 break-all text-center text-xs text-[var(--kz-ash)]">
-                box.koza.click/r/<span className="text-[var(--kz-coral)]">{code}</span>
+                {getSite().boxHost}/r/<span className="text-[var(--kz-coral)]">{code}</span>
               </p>
               <button
                 onClick={() => copy(invite, "Link")}

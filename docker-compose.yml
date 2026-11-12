@@ -1,85 +1,83 @@
-# ─────────────────────────────────────────────────────────────────────
-# koza — Self-Hosted Stack
+# koza — self-hosted stack
 #
-#   Quickstart (local):   docker compose up -d --build
-#   With TURN relay:      docker compose --profile turn up -d --build
-#   With automatic HTTPS: docker compose --profile proxy up -d --build
-#   Everything:           docker compose --profile proxy --profile turn up -d --build
+#   cp .env.example .env            # then edit it
+#   docker compose up -d --build                    # web :3000 + api :8787
+#   docker compose --profile proxy up -d --build    # + Caddy with automatic HTTPS
+#   docker compose --profile turn  up -d --build    # + coturn relay
 #
-# Copy .env.example to .env before starting.
-# ─────────────────────────────────────────────────────────────────────
+# For Dokploy / Traefik use infra/dokploy-compose.yml instead.
+
+x-koza-env: &koza-env
+  KOZA_HOST: ${KOZA_HOST:-localhost:3000}
+  KOZA_BOX_HOST: ${KOZA_BOX_HOST:-box.localhost:3000}
+  KOZA_BASE_URL: ${KOZA_BASE_URL:-}
+  KOZA_BOX_URL: ${KOZA_BOX_URL:-}
 
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: koza-web
+    build: .
     restart: unless-stopped
     ports:
       - "${KOZA_WEB_PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - HOSTNAME=0.0.0.0
-      - KOZA_API_URL=http://api:8787
+      <<: *koza-env
+      KOZA_API_URL: http://api:8787
+      KOZA_SIGNAL_URL: ${KOZA_SIGNAL_URL:-}
+      KOZA_REPO_URL: ${KOZA_REPO_URL:-}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   api:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    container_name: koza-api
+    build: ./server
     restart: unless-stopped
     ports:
+      # exposed so browsers can reach /signal directly when no proxy is used
       - "${KOZA_API_PORT:-8787}:8787"
     environment:
-      - NODE_ENV=production
-      - PORT=8787
-      - KOZA_DATA_DIR=/data
-      - KOZA_ADMIN_KEY=${KOZA_ADMIN_KEY:-}
-      - KOZA_BASE_URL=${KOZA_BASE_URL:-http://localhost:3000}
-      - KOZA_TURN_SECRET=${KOZA_TURN_SECRET:-}
-      - KOZA_TURN_URLS=${KOZA_TURN_URLS:-}
+      <<: *koza-env
+      KOZA_ADMIN_KEY: ${KOZA_ADMIN_KEY:-}
+      KOZA_TRUST_PROXY: ${KOZA_TRUST_PROXY:-1}
+      KOZA_CORS_ORIGINS: ${KOZA_CORS_ORIGINS:-}
+      KOZA_BLOCKED_DOMAINS: ${KOZA_BLOCKED_DOMAINS:-}
+      KOZA_SAFE_BROWSING_KEY: ${KOZA_SAFE_BROWSING_KEY:-}
+      KOZA_ROOM_TTL_MS: ${KOZA_ROOM_TTL_MS:-3600000}
+      KOZA_TURN_SECRET: ${KOZA_TURN_SECRET:-}
+      KOZA_TURN_URLS: ${KOZA_TURN_URLS:-}
     volumes:
       - koza-data:/data
 
-  # ── TURN Relay (Optional) ───────────────────────────────────────────
-  # Used for direct P2P fallback when symmetric NAT prevents direct connection.
+  # TURN relay for peers behind symmetric NAT (optional)
   coturn:
     image: coturn/coturn:alpine
-    container_name: koza-turn
     profiles: ["turn"]
     restart: unless-stopped
     network_mode: host
-    command:
-      [
-        "-n",
-        "--listening-port=3478",
-        "--min-port=49160",
-        "--max-port=49200",
-        "--use-auth-secret",
-        "--static-auth-secret=${KOZA_TURN_SECRET:-}",
-        "--realm=${KOZA_REALM:-localhost}",
-        "--no-multicast-peers",
-        "--no-cli",
-      ]
+    volumes:
+      - ./infra/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # secret is written into a private config at start, so it never appears in
+    # the process list (`ps`) as a command-line argument
+    entrypoint:
+      - sh
+      - -c
+      - 'umask 077 && { cat /etc/coturn/turnserver.conf; printf "static-auth-secret=%s\nrealm=%s\n" "$$KOZA_TURN_SECRET" "$$KOZA_TURN_REALM"; } > /tmp/turnserver.conf && exec turnserver -c /tmp/turnserver.conf'
+    environment:
+      KOZA_TURN_SECRET: ${KOZA_TURN_SECRET:-}
+      KOZA_TURN_REALM: ${KOZA_HOST:-localhost}
 
-  # ── Automatic HTTPS Proxy (Optional) ────────────────────────────────
-  # Automatic Let's Encrypt certificates via Caddy.
+  # automatic HTTPS (optional)
   caddy:
     image: caddy:2-alpine
-    container_name: koza-caddy
     profiles: ["proxy"]
     restart: unless-stopped
-    depends_on:
-      - web
-      - api
+    depends_on: [web, api]
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
+    environment:
+      KOZA_HOST: ${KOZA_HOST:-localhost}
+      KOZA_BOX_HOST: ${KOZA_BOX_HOST:-box.localhost}
     volumes:
       - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -1,93 +1,97 @@
-# koza — Dokploy / Traefik production compose stack
+# koza — Dokploy / Traefik production stack
 #
-# Deploy via Dokploy:
-#   - Connect GitHub repo (dimskoff/koza, branch main)
-#   - Set Compose path to infra/dokploy-compose.yml
-#   - Set environment variables (KOZA_ADMIN_KEY, KOZA_TURN_SECRET, KOZA_BASE_URL)
-#   - Deploy! Containers attach to dokploy-network and Traefik configures SSL automatically.
+# Dokploy → Add Service → Compose → GitHub repo, compose path: infra/dokploy-compose.yml
+# Environment: see .env.example (KOZA_HOST, KOZA_BOX_HOST, KOZA_ADMIN_KEY, KOZA_TURN_SECRET…)
+#
+# Routing (Traefik):
+#   <host>/signal, <host>/api/v1/box/stream/*  → api   (WebSocket + long streams)
+#   everything else                            → web   (Next.js, proxies /api/v1 to api)
 
 networks:
   dokploy-network:
     external: true
-    name: dokploy-network
 
 volumes:
   koza-data:
     name: koza_koza-data
 
+x-koza-env: &koza-env
+  KOZA_HOST: ${KOZA_HOST:?set KOZA_HOST}
+  KOZA_BOX_HOST: ${KOZA_BOX_HOST:?set KOZA_BOX_HOST}
+  KOZA_BASE_URL: ${KOZA_BASE_URL:-}
+  KOZA_BOX_URL: ${KOZA_BOX_URL:-}
+
 services:
   web:
     build:
       context: ..
-      dockerfile: infra/koza-web.dockerfile
-    image: koza-web:latest
+      dockerfile: Dockerfile
     restart: unless-stopped
     networks:
       dokploy-network:
         aliases: [koza-web]
     environment:
-      NODE_ENV: production
-      PORT: "3000"
-      HOSTNAME: 0.0.0.0
+      <<: *koza-env
       KOZA_API_URL: http://koza-api:8787
+      KOZA_REPO_URL: ${KOZA_REPO_URL:-}
+    depends_on:
+      api:
+        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      # HTTP -> HTTPS redirect
-      - traefik.http.routers.koza-web-web.entrypoints=web
-      - traefik.http.routers.koza-web-web.rule=Host(`${KOZA_HOST:-koza.click}`) || Host(`${KOZA_BOX_HOST:-box.koza.click}`)
-      - traefik.http.routers.koza-web-web.middlewares=redirect-to-https@file
-      # HTTPS -> Next.js frontend
-      - traefik.http.routers.koza-web-websecure.entrypoints=websecure
-      - traefik.http.routers.koza-web-websecure.rule=Host(`${KOZA_HOST:-koza.click}`) || Host(`${KOZA_BOX_HOST:-box.koza.click}`)
-      - traefik.http.routers.koza-web-websecure.tls.certresolver=letsencrypt
-      - traefik.http.routers.koza-web-websecure.priority=10
+      - traefik.http.routers.koza-web-http.entrypoints=web
+      - traefik.http.routers.koza-web-http.rule=Host(`${KOZA_HOST}`) || Host(`${KOZA_BOX_HOST}`)
+      - traefik.http.routers.koza-web-http.middlewares=redirect-to-https@file
+      - traefik.http.routers.koza-web.entrypoints=websecure
+      - traefik.http.routers.koza-web.rule=Host(`${KOZA_HOST}`) || Host(`${KOZA_BOX_HOST}`)
+      - traefik.http.routers.koza-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.koza-web.priority=10
       - traefik.http.services.koza-web.loadbalancer.server.port=3000
 
   api:
     build:
       context: ../server
-      dockerfile: Dockerfile
-    image: koza-api:latest
     restart: unless-stopped
     networks:
       dokploy-network:
         aliases: [koza-api]
     environment:
-      NODE_ENV: production
-      PORT: "8787"
-      KOZA_ADMIN_KEY: ${KOZA_ADMIN_KEY:-}
-      KOZA_BASE_URL: ${KOZA_BASE_URL:-https://koza.click}
+      <<: *koza-env
+      KOZA_ADMIN_KEY: ${KOZA_ADMIN_KEY:?set KOZA_ADMIN_KEY}
+      # Traefik appends exactly one X-Forwarded-For hop
+      KOZA_TRUST_PROXY: "1"
+      KOZA_BLOCKED_DOMAINS: ${KOZA_BLOCKED_DOMAINS:-}
+      KOZA_SAFE_BROWSING_KEY: ${KOZA_SAFE_BROWSING_KEY:-}
+      KOZA_ROOM_TTL_MS: ${KOZA_ROOM_TTL_MS:-3600000}
       KOZA_TURN_SECRET: ${KOZA_TURN_SECRET:-}
-      KOZA_TURN_URLS: ${KOZA_TURN_URLS:-turn:koza.click:3478?transport=udp,turn:koza.click:3478?transport=tcp}
+      KOZA_TURN_URLS: ${KOZA_TURN_URLS:-}
     volumes:
       - koza-data:/data
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      # WebSocket signaling wss://<domain>/signal
-      - traefik.http.routers.koza-api-web.entrypoints=web
-      - traefik.http.routers.koza-api-web.rule=(Host(`${KOZA_HOST:-koza.click}`) || Host(`${KOZA_BOX_HOST:-box.koza.click}`)) && PathPrefix(`/signal`)
-      - traefik.http.routers.koza-api-web.middlewares=redirect-to-https@file
-      - traefik.http.routers.koza-api-websecure.entrypoints=websecure
-      - traefik.http.routers.koza-api-websecure.rule=(Host(`${KOZA_HOST:-koza.click}`) || Host(`${KOZA_BOX_HOST:-box.koza.click}`)) && PathPrefix(`/signal`)
-      - traefik.http.routers.koza-api-websecure.tls.certresolver=letsencrypt
-      - traefik.http.routers.koza-api-websecure.priority=100
+      - traefik.http.routers.koza-api-http.entrypoints=web
+      - traefik.http.routers.koza-api-http.rule=(Host(`${KOZA_HOST}`) || Host(`${KOZA_BOX_HOST}`)) && (Path(`/signal`) || PathPrefix(`/api/v1/box/stream/`))
+      - traefik.http.routers.koza-api-http.middlewares=redirect-to-https@file
+      - traefik.http.routers.koza-api.entrypoints=websecure
+      - traefik.http.routers.koza-api.rule=(Host(`${KOZA_HOST}`) || Host(`${KOZA_BOX_HOST}`)) && (Path(`/signal`) || PathPrefix(`/api/v1/box/stream/`))
+      - traefik.http.routers.koza-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.koza-api.priority=100
       - traefik.http.services.koza-api.loadbalancer.server.port=8787
 
   coturn:
     image: coturn/coturn:alpine
     restart: unless-stopped
     network_mode: host
-    command:
-      [
-        "-n",
-        "--listening-port=3478",
-        "--min-port=49160",
-        "--max-port=49200",
-        "--use-auth-secret",
-        "--static-auth-secret=${KOZA_TURN_SECRET:-}",
-        "--realm=${KOZA_HOST:-koza.click}",
-        "--no-multicast-peers",
-        "--no-cli",
-      ]
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    # secret is written into a private config at start, so it never appears in
+    # the process list (`ps`) as a command-line argument
+    entrypoint:
+      - sh
+      - -c
+      - 'umask 077 && { cat /etc/coturn/turnserver.conf; printf "static-auth-secret=%s\nrealm=%s\n" "$$KOZA_TURN_SECRET" "$$KOZA_TURN_REALM"; } > /tmp/turnserver.conf && exec turnserver -c /tmp/turnserver.conf'
+    environment:
+      KOZA_TURN_SECRET: ${KOZA_TURN_SECRET:?set KOZA_TURN_SECRET}
+      KOZA_TURN_REALM: ${KOZA_HOST}

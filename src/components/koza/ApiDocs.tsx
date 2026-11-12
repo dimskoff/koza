@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { KozaToaster } from "../KozaToaster";
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Copy, Terminal } from "lucide-react";
-import { toast, Toaster } from "sonner";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { getSite } from "@/lib/site";
 import { KozaFooter, KozaNav } from "./Sections";
 
 interface Endpoint {
@@ -18,7 +20,8 @@ interface Endpoint {
   status: string;
 }
 
-const BASE = "https://koza.click/api/v1";
+const SITE = getSite();
+const BASE = `${SITE.baseUrl}/api/v1`;
 
 const SHORTENER: Endpoint[] = [
   {
@@ -33,7 +36,7 @@ const SHORTENER: Endpoint[] = [
   "link": {
     "slug": "gh",
     "url": "https://github.com/dimskoff/koza",
-    "short_url": "https://koza.click/gh",
+    "short_url": "${SITE.baseUrl}/gh",
     "password": true,
     "clicks": 0,
     "created_at": "2026-11-09T12:00:00.000Z"
@@ -51,7 +54,7 @@ const SHORTENER: Endpoint[] = [
   "link": {
     "slug": "gh",
     "url": null,
-    "short_url": "https://koza.click/gh",
+    "short_url": "${SITE.baseUrl}/gh",
     "password": true,
     "clicks": 14,
     "created_at": "2026-11-09T12:00:00.000Z"
@@ -87,7 +90,7 @@ const BOX: Endpoint[] = [
     response: `{
   "room": {
     "code": "K7RXT5",
-    "url": "https://box.koza.click/r/K7RXT5",
+    "url": "${SITE.boxUrl}/r/K7RXT5",
     "password": true,
     "fingerprint": "0A7E·BB82·CDC4·D3BB",
     "files": [{ "name": "archive.zip", "size": 4821900 }],
@@ -107,7 +110,7 @@ const BOX: Endpoint[] = [
     response: `{
   "room": {
     "code": "K7RXT5",
-    "url": "https://box.koza.click/r/K7RXT5",
+    "url": "${SITE.boxUrl}/r/K7RXT5",
     "password": true,
     "fingerprint": "0A7E·BB82·CDC4·D3BB",
     "files": [{ "name": "archive.zip", "size": 4821900 }]
@@ -308,20 +311,7 @@ export function ApiDocs() {
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
-      <Toaster
-        position="bottom-right"
-        gap={8}
-        toastOptions={{
-          style: {
-            background: "rgba(17,18,20,0.92)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "#e6e6e6",
-            borderRadius: "12px",
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "13px",
-          },
-        }}
-      />
+      <KozaToaster />
       <KozaNav />
 
       <main className="mx-auto w-full max-w-xl flex-1 px-4 pt-10 pb-16 sm:pt-14">
@@ -355,7 +345,7 @@ export function ApiDocs() {
             <h2 className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
               01 · Shortener
             </h2>
-            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">koza.click</span>
+            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">{SITE.host}</span>
           </div>
           <div className="space-y-2">
             {SHORTENER.map((ep) => (
@@ -375,7 +365,7 @@ export function ApiDocs() {
             <h2 className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
               02 · Box
             </h2>
-            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">box.koza.click</span>
+            <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">{SITE.boxHost}</span>
           </div>
           <div className="space-y-2">
             {BOX.map((ep) => (

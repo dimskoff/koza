@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-/* box.koza.click — client-side transfer helpers & metrics */
+/* box — client-side transfer helpers & metrics */
+import { roomUrlOf } from "@/lib/site";
 
 export interface BoxFile {
   id: string;
@@ -40,11 +41,11 @@ export function roomCode(): string {
 }
 
 export function shortLinkOf(code: string): string {
-  return `https://box.koza.click/r/${code}`;
+  return roomUrlOf(code);
 }
 
 export function roomLinkOf(code: string): string {
-  return `https://box.koza.click/r/${code}`;
+  return roomUrlOf(code);
 }
 
 export function prettySize(bytes: number): string {

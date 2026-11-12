@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -240,7 +241,7 @@ export function LinkGate({
                     ) : (
                       <span className="kz-mono flex items-center gap-1.5 text-[11.5px] text-[var(--kz-smoke)]">
                         <Lock className="h-3 w-3 text-[var(--kz-coral)]" />
-                        koza.click/<span className="text-[var(--kz-ash)]">{cleanSlug}</span>
+                        {getSite().host}/<span className="text-[var(--kz-ash)]">{cleanSlug}</span>
                       </span>
                     )}
                     <span className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-smoke)] sm:inline-flex">
@@ -290,7 +291,7 @@ export function LinkGate({
               >
                 <div className="flex min-h-[56px] items-center justify-between gap-3 border-b border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4">
                   <p className="kz-mono min-w-0 truncate text-[15px]">
-                    <span className="text-[var(--kz-smoke)]">koza.click/</span>
+                    <span className="text-[var(--kz-smoke)]">{getSite().host}/</span>
                     <span className="text-[var(--kz-coral)]">{cleanSlug}</span>
                   </p>
                   <a

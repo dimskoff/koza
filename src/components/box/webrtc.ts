@@ -19,6 +19,8 @@
      `sendFiles()`.
    ───────────────────────────────────────────────────────────────────── */
 
+import { getSite } from "@/lib/site";
+
 const STUN_FALLBACK: RTCIceServer[] = [
   {
     urls: [
@@ -124,11 +126,12 @@ function packChunkFrame(
 /* Resolve the signaling WebSocket URL */
 export function signalUrl(): string {
   if (typeof window === "undefined") return "";
-  const env = process.env.NEXT_PUBLIC_KOZA_SIGNAL_URL;
-  if (env) return env;
+  const configured = getSite().signalUrl;
+  if (configured) return configured;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.hostname;
-  if (host === "localhost" || host === "127.0.0.1") {
+  /* local dev: Next.js can't proxy WebSockets, talk to the api port directly */
+  if (host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1") {
     return `${proto}//${host}:8787/signal`;
   }
   return `${proto}//${window.location.host}/signal`;

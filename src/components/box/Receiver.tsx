@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { KozaToaster } from "../KozaToaster";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -14,7 +15,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { Toaster, toast } from "sonner";
+import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BoxFooter, BoxNav } from "./Sections";
 import {
@@ -23,8 +24,9 @@ import {
   PeerSpin,
   TransferPanel,
 } from "./visuals";
-import { wipeTo } from "../wipe";
-import { BoxReceiver, computeTransferFingerprint, saveBlob } from "./webrtc";
+import { switchTo } from "../transition";
+import { BoxReceiver, computeTransferFingerprint, saveBlob, type TransportMode } from "./webrtc";
+import { TransportBadge } from "./TransportBadge";
 import {
   fmtDuration,
   fmtSpeed,
@@ -59,6 +61,7 @@ export function Receiver({ code }: { code: string }) {
   const [eta, setEta] = useState(0);
   const [receivedFor, setReceivedFor] = useState(0);
   const [errorReason, setErrorReason] = useState("");
+  const [transport, setTransport] = useState<TransportMode | null>(null);
   const [received, setReceived] = useState<ReceivedFile[]>([]);
 
   const engineRef = useRef<BoxReceiver | null>(null);
@@ -93,10 +96,8 @@ export function Receiver({ code }: { code: string }) {
     return () => window.removeEventListener("beforeunload", guard);
   }, [stage]);
 
-  /* Fetch the live room from the backend */
+  /* Fetch the live room from the backend (state starts at "linking") */
   const probeRoom = useCallback(() => {
-    setStage("linking");
-    setErrorReason("");
     let alive = true;
     fetch(`/api/v1/box/rooms/${encodeURIComponent(code.toUpperCase())}`, {
       cache: "no-store",
@@ -144,9 +145,13 @@ export function Receiver({ code }: { code: string }) {
     };
   }, [code]);
 
-  useEffect(() => {
-    return probeRoom();
-  }, [probeRoom]);
+  useEffect(() => probeRoom(), [probeRoom]);
+
+  const retryProbe = () => {
+    setStage("linking");
+    setErrorReason("");
+    probeRoom();
+  };
 
   const totalBytes = offer?.files.reduce((a, f) => a + f.size, 0) ?? 0;
   const totalMoved =
@@ -204,7 +209,8 @@ export function Receiver({ code }: { code: string }) {
             setStage("error");
           }
         },
-        onChannelOpen: () => {
+        onChannelOpen: (mode) => {
+          if (mode) setTransport(mode);
           t0.current = Date.now();
         },
         onFileStart: (index) => {
@@ -294,21 +300,7 @@ export function Receiver({ code }: { code: string }) {
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
-      <Toaster
-        position="bottom-right"
-        gap={8}
-        toastOptions={{
-          style: {
-            background: "rgba(17,18,20,0.92)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "#e6e6e6",
-            borderRadius: "12px",
-            fontFamily: "var(--font-geist-mono), monospace",
-            fontSize: "13px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-          },
-        }}
-      />
+      <KozaToaster />
       <BoxNav />
 
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
@@ -380,6 +372,7 @@ export function Receiver({ code }: { code: string }) {
               {offer?.fingerprint && (stage === "offer" || stage === "receiving") && (
                 <FingerprintHover fingerprint={offer.fingerprint} />
               )}
+              {(stage === "receiving" || stage === "done") && <TransportBadge mode={transport} />}
               {stage === "receiving" && (
                 <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
                   <Timer className="h-3.5 w-3.5" />
@@ -446,13 +439,13 @@ export function Receiver({ code }: { code: string }) {
 
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <button
-                      onClick={() => probeRoom()}
+                      onClick={retryProbe}
                       className="kz-neutral-btn flex h-12 cursor-pointer items-center justify-center gap-2 text-sm"
                     >
                       <RotateCcw className="h-4 w-4" /> Try again
                     </button>
                     <button
-                      onClick={() => wipeTo("/box")}
+                      onClick={() => switchTo("box")}
                       className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm"
                     >
                       Open box <ArrowRight className="h-4 w-4" />
@@ -612,7 +605,7 @@ export function Receiver({ code }: { code: string }) {
                     </div>
                   </div>
                   <button
-                    onClick={() => probeRoom()}
+                    onClick={retryProbe}
                     className="kz-neutral-btn mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
                   >
                     <RotateCcw className="h-4 w-4" /> Try the line again
@@ -685,7 +678,7 @@ export function Receiver({ code }: { code: string }) {
                       <Download className="h-4 w-4" /> Save receipt
                     </button>
                     <button
-                      onClick={() => wipeTo("/box")}
+                      onClick={() => switchTo("box")}
                       className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm"
                     >
                       Open box <ArrowRight className="h-4 w-4" />

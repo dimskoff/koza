@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { getSite } from "@/lib/site";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
 import { getProductUrl, prefetchProduct, switchTo, useProductTransition } from "../transition";
 
-/* ── Slim nav for koza.click (unified max-w-xl) ──────────────── */
+/* ── Slim nav for the shortener (unified max-w-xl) ──────────────── */
 export function KozaNav() {
   const transition = useProductTransition();
   const isSwitchingToBox = transition === "box";
@@ -18,7 +19,7 @@ export function KozaNav() {
         <a
           href={homeUrl}
           className="flex items-center gap-2.5 outline-none"
-          aria-label="koza.click home"
+          aria-label={`${getSite().host} home`}
         >
           <div className="shrink-0">
             {isSwitchingToBox ? <BoxMark size={20} /> : <LinkMark size={20} />}
@@ -45,7 +46,7 @@ export function KozaNav() {
             onFocus={() => prefetchProduct("box")}
             disabled={isSwitchingToBox}
             className="kz-neutral-btn flex h-8 w-[76px] cursor-pointer items-center justify-center gap-1.5 text-[12px] transition-all disabled:opacity-85"
-            aria-label="Switch to box.koza.click"
+            aria-label={`Switch to ${getSite().boxHost}`}
           >
             {isSwitchingToBox ? (
               <>

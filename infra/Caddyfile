@@ -1,26 +1,29 @@
-# ─────────────────────────────────────────────────────────────────────
-# koza · automatic https reverse proxy (Caddy 2)
+# koza · automatic HTTPS reverse proxy (Caddy 2)
 #
-# 1. point your domains' A records at this box
-# 2. set KOZA_HOST and KOZA_BOX_HOST in .env
-# 3. docker compose --profile proxy up -d
-# ─────────────────────────────────────────────────────────────────────
+# 1. point the DNS A records of KOZA_HOST and KOZA_BOX_HOST at this server
+# 2. set them in .env
+# 3. docker compose --profile proxy up -d --build
 
-{$KOZA_HOST:koza.click}, {$KOZA_BOX_HOST:box.koza.click} {
-	# websocket signaling — long-lived, no buffering
-	handle /signal* {
-		reverse_proxy api:8787
+{$KOZA_HOST}, {$KOZA_BOX_HOST} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
 	}
 
-	# the api
-	handle /api/* {
-		reverse_proxy api:8787
+	# WebSocket signaling and long-lived relay streams go straight to the api
+	@api path /signal /api/v1/box/stream/*
+	handle @api {
+		reverse_proxy api:8787 {
+			flush_interval -1
+		}
 	}
 
-	# next.js frontend + short link resolution
+	# everything else (pages, /api/v1 proxy, short-link redirects) → Next.js
 	handle {
 		reverse_proxy web:3000
 	}
-
-	encode gzip
 }

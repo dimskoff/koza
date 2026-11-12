@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 
-export const KOZA_REPO = "https://github.com/dimskoff/koza";
+import { getSite } from "@/lib/site";
+
+/* "https://github.com/owner/repo" → "https://api.github.com/repos/owner/repo" (github only) */
+function githubApiUrl(repoUrl: string): string | null {
+  const m = repoUrl.match(/^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/);
+  return m ? `https://api.github.com/repos/${m[1]}` : null;
+}
 
 /* github mark, current-path style so it sits quietly in mono ui */
 export function GithubMark({ className = "h-3.5 w-3.5" }: { className?: string }) {
@@ -31,7 +37,9 @@ export function GithubLink({ label = "github" }: { label?: string }) {
         setStars(cached);
         return;
       }
-      fetch("https://api.github.com/repos/dimskoff/koza", {
+      const api = githubApiUrl(getSite().repoUrl);
+      if (!api) return;
+      fetch(api, {
         signal: AbortSignal.timeout(4000),
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -52,7 +60,7 @@ export function GithubLink({ label = "github" }: { label?: string }) {
 
   return (
     <a
-      href={KOZA_REPO}
+      href={getSite().repoUrl}
       target="_blank"
       rel="noreferrer"
       className="kz-ghost-btn flex items-center gap-1 rounded-md px-1.5 py-1"
