@@ -463,5 +463,7 @@ html[data-arrive] .kz-veil-content {
 .kz-below-card > * {
   position: absolute;
   inset-inline: 0;
-  top: 0;
+  /* the gap lives inside the slot: any margin here would shift the
+     centered block vs. the box page and make it jump after a switch */
+  top: 1.25rem;
 }

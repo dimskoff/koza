@@ -31,7 +31,7 @@ export function KozaSite() {
 
         {/* Zero-height slot: the list hangs below the centered card, so the card
             never moves when the local list hydrates or changes. */}
-        <div className="kz-below-card mt-5 w-full max-w-xl">
+        <div className="kz-below-card w-full max-w-xl">
           <div
             className={`transition-opacity duration-150 ${
               leavingForBox ? "pointer-events-none opacity-0" : "opacity-100"
