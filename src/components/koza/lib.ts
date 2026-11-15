@@ -14,6 +14,8 @@ export interface KozaLink {
 const STORE_KEY = "koza_links_v1";
 const MAX_LINKS = 50;
 
+/* keep in sync with RESERVED in server/server.js — a mismatch lets the form
+ * accept a name the api then rejects (or one that shadows a site route) */
 export const RESERVED_SLUGS = new Set([
   "www",
   "api",
@@ -24,6 +26,9 @@ export const RESERVED_SLUGS = new Set([
   "status",
   "docs",
   "help",
+  "health",
+  "healthz",
+  "policy",
   "login",
   "signup",
   "dashboard",
@@ -37,9 +42,12 @@ export const RESERVED_SLUGS = new Set([
   "r",
   "room",
   "signal",
-  "health",
+  "stream",
+  "self-host",
   "favicon.ico",
   "robots.txt",
+  "_next",
+  "static",
 ]);
 
 const SLUG_ALPHABET = "abcdefghjkmnpqrstuvwxyz234567892";
@@ -168,7 +176,13 @@ export function subscribeLinks(onChange: () => void): () => void {
 }
 
 export function getLinksSnapshot(): KozaLink[] {
-  const raw = window.localStorage.getItem(STORE_KEY);
+  let raw: string | null = null;
+  try {
+    /* throws when storage is disabled (Safari private mode, blocked cookies) */
+    raw = window.localStorage.getItem(STORE_KEY);
+  } catch {
+    raw = null;
+  }
   if (raw !== cachedJson) {
     cachedJson = raw;
     try {

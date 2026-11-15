@@ -67,9 +67,14 @@ export function StatusDashboard() {
   }, []);
 
   useEffect(() => {
-    fetchStats();
-    const id = setInterval(() => fetchStats(false), 5000);
-    return () => clearInterval(id);
+    /* first poll is scheduled, not called inline — keeps state updates out of
+     * the effect body (react-hooks/set-state-in-effect) */
+    const first = setTimeout(() => void fetchStats(false), 0);
+    const id = setInterval(() => void fetchStats(false), 5000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
   }, [fetchStats]);
 
   const isServiceOk = (v: ServiceHealth | string | undefined) =>

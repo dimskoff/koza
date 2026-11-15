@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  *
- * koza server v2.2 — high-performance zero-storage P2P & stream backend.
+ * koza server — high-performance zero-storage P2P & stream backend.
  *   · link shortener  — http api + 302 redirects, clicks counted
  *   · box registry    — rooms staged by the sender, resolved by code
  *   · hybrid p2p      — /signal handles WebRTC signaling AND zero-copy
@@ -34,7 +34,14 @@ const list = (raw) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-const PORT = Number(env("PORT", "8787"));
+/* Numeric env with a fallback: a typo like KOZA_ROOM_TTL_MS=1h must not turn
+ * into NaN (rooms that never expire / a server that listens on a random port). */
+const numEnv = (name, fallback) => {
+  const n = Number(env(name, String(fallback)));
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+const PORT = numEnv("PORT", 8787);
 const DATA_DIR = env("KOZA_DATA_DIR", path.join(__dirname, "data"));
 const ADMIN_KEY = env("KOZA_ADMIN_KEY");
 const HOST = env("KOZA_HOST", "localhost:3000").toLowerCase();
@@ -42,7 +49,7 @@ const BOX_HOST = env("KOZA_BOX_HOST", `box.${HOST}`).toLowerCase();
 const DEFAULT_PROTO = HOST.startsWith("localhost") || HOST.startsWith("127.") ? "http" : "https";
 const FIXED_BASE = env("KOZA_BASE_URL", `${DEFAULT_PROTO}://${HOST}`).replace(/\/+$/, "");
 const BOX_BASE = env("KOZA_BOX_URL", `${DEFAULT_PROTO}://${BOX_HOST}`).replace(/\/+$/, "");
-const ROOM_TTL_MS = Number(env("KOZA_ROOM_TTL_MS", String(60 * 60 * 1000)));
+const ROOM_TTL_MS = numEnv("KOZA_ROOM_TTL_MS", 60 * 60 * 1000) || 60 * 60 * 1000;
 const MAX_FILES_PER_ROOM = 12;
 const MAX_LANES_PER_ROLE = 8;
 
@@ -66,7 +73,7 @@ const TURN_HOST = HOST.split(":")[0];
 const TURN_URLS = list(
   env("KOZA_TURN_URLS", `turn:${TURN_HOST}:3478?transport=udp,turn:${TURN_HOST}:3478?transport=tcp`),
 );
-const TURN_TTL_S = Number(env("KOZA_TURN_TTL_S", "3600"));
+const TURN_TTL_S = numEnv("KOZA_TURN_TTL_S", 3600) || 3600;
 
 /* ── runtime telemetry ──────────────────────────────────────────────── */
 const telemetry = {
@@ -175,6 +182,9 @@ const RESERVED = new Set([
   "status",
   "docs",
   "help",
+  "health",
+  "healthz",
+  "policy",
   "login",
   "signup",
   "dashboard",
@@ -306,7 +316,7 @@ async function safeBrowsingFlagged(url) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          client: { clientId: "koza", clientVersion: "2.3.0" },
+          client: { clientId: "koza", clientVersion: VERSION },
           threatInfo: {
             threatTypes: ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
             platformTypes: ["ANY_PLATFORM"],
@@ -428,28 +438,63 @@ function sendJson(res, req, status, obj) {
   res.end(body);
 }
 
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
 function readBody(req, limit = 128 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let done = false;
     const chunks = [];
     req.on("data", (c) => {
+      if (done) return;
       size += c.length;
       if (size > limit) {
-        reject(new Error("body too large"));
-        req.destroy();
+        done = true;
+        /* stop buffering, but keep the socket so the 413 can be delivered */
+        req.removeAllListeners("data");
+        req.resume();
+        reject(new HttpError(413, "body too large"));
         return;
       }
       chunks.push(c);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (done) return;
+      done = true;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (done) return;
+      done = true;
+      reject(err);
+    });
   });
 }
 
+/* Always resolves to a plain object: `null`, arrays and primitives are
+ * rejected up front instead of crashing later on `body.url`. */
 async function readJson(req) {
   const raw = await readBody(req);
-  if (!raw) return {};
-  return JSON.parse(raw);
+  if (!raw.trim()) return {};
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HttpError(400, "body must be a json object");
+  }
+  return parsed;
+}
+
+/* decodeURIComponent throws on malformed escapes like "%zz" */
+function decodeParam(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new HttpError(400, "malformed url escape");
+  }
 }
 
 /* Admin operations are DENIED when no admin key is configured. */
@@ -567,44 +612,52 @@ function pruneRooms() {
 setInterval(pruneRooms, 5 * 60 * 1000).unref();
 
 /* ── direct zero-storage HTTP stream pipe handler ───────────────────── */
-async function handleDirectStream(req, res, code, fileIdx, url) {
+const STREAM_WAIT_MS = 30_000;
+
+/* Forget one side of a not-yet-bridged pipe; drop the slot once both are gone. */
+function dropSlotSide(key, slot, side) {
+  if (slot.piped) return;
+  if (side === "sender") {
+    if (slot.senderTimer) clearTimeout(slot.senderTimer);
+    slot.senderTimer = null;
+    slot.senderReq = null;
+    slot.senderRes = null;
+  } else {
+    if (slot.receiverTimer) clearTimeout(slot.receiverTimer);
+    slot.receiverTimer = null;
+    slot.receiverReq = null;
+    slot.receiverRes = null;
+  }
+  if (!slot.senderReq && !slot.receiverRes && streamPipes.get(key) === slot) {
+    streamPipes.delete(key);
+  }
+}
+
+async function handleDirectStream(req, res, code, fileIdx) {
   const room = db.rooms[code];
   if (!room || Date.now() - room.createdAt > ROOM_TTL_MS) {
     return sendJson(res, req, 404, { error: "no such room" });
   }
-  const fileMeta = room.files[fileIdx] || { name: `file-${fileIdx}`, size: 0 };
+  const files = Array.isArray(room.files) ? room.files : [];
+  /* without staged metadata any index up to the per-room cap is accepted;
+   * otherwise only real file slots — arbitrary indexes used to grow
+   * streamPipes without bound */
+  const maxIdx = files.length > 0 ? files.length : MAX_FILES_PER_ROOM;
+  if (!Number.isSafeInteger(fileIdx) || fileIdx < 0 || fileIdx >= maxIdx) {
+    return sendJson(res, req, 404, { error: "no such file in this room" });
+  }
+  const fileMeta = files[fileIdx] || { name: `file-${fileIdx}`, size: 0 };
   const key = `${code}:${fileIdx}`;
 
+  let side;
   if (req.method === "POST" || req.method === "PUT") {
     /* secrets travel in headers only — query strings end up in proxy logs */
     const token = req.headers["x-koza-token"] || "";
     if (!safeEqual(room.senderToken, String(token))) {
       return sendJson(res, req, 401, { error: "invalid sender token" });
     }
-    let slot = streamPipes.get(key);
-    if (!slot) {
-      slot = {};
-      streamPipes.set(key, slot);
-    }
-    if (slot.senderTimer) clearTimeout(slot.senderTimer);
-    slot.senderReq = req;
-    slot.senderRes = res;
-
-    req.socket?.setNoDelay?.(true);
-    if (slot.receiverRes) {
-      bridgeHttpStreams(key, slot, fileMeta);
-    } else {
-      slot.senderTimer = setTimeout(() => {
-        if (streamPipes.get(key) === slot && !slot.piped) {
-          streamPipes.delete(key);
-          if (!res.headersSent) sendJson(res, req, 408, { error: "receiver timeout" });
-        }
-      }, 30_000);
-    }
-    return;
-  }
-
-  if (req.method === "GET") {
+    side = "sender";
+  } else if (req.method === "GET") {
     if (!allowRate(req, "stream", 60, 60_000)) {
       return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
     }
@@ -612,52 +665,104 @@ async function handleDirectStream(req, res, code, fileIdx, url) {
     if (room.password && !(await verifyPass(room.password, String(pw)))) {
       return sendJson(res, req, 403, { error: "wrong password" });
     }
-    let slot = streamPipes.get(key);
-    if (!slot) {
-      slot = {};
-      streamPipes.set(key, slot);
-    }
-    if (slot.receiverTimer) clearTimeout(slot.receiverTimer);
+    side = "receiver";
+  } else {
+    return sendJson(res, req, 405, { error: "method not allowed" });
+  }
+
+  /* the client may have hung up while the password was being checked */
+  if (res.destroyed || req.socket?.destroyed) return;
+
+  let slot = streamPipes.get(key);
+  if (slot?.piped) {
+    /* previously a second request here was parked forever on a bridged slot */
+    return sendJson(res, req, 409, { error: "this file is already streaming" });
+  }
+  if (!slot) {
+    slot = {};
+    streamPipes.set(key, slot);
+  }
+
+  /* a newer request on the same side replaces a parked one — answer the old
+   * one instead of leaving its connection hanging */
+  const prevReq = side === "sender" ? slot.senderReq : slot.receiverReq;
+  const prevRes = side === "sender" ? slot.senderRes : slot.receiverRes;
+  if (prevRes && prevRes !== res) {
+    dropSlotSide(key, slot, side);
+    sendJson(prevRes, prevReq, 409, { error: "superseded by a newer request" });
+    streamPipes.set(key, slot);
+  }
+
+  if (side === "sender") {
+    slot.senderReq = req;
+    slot.senderRes = res;
+  } else {
     slot.receiverReq = req;
     slot.receiverRes = res;
+  }
+  req.socket?.setNoDelay?.(true);
 
-    res.socket?.setNoDelay?.(true);
-    if (slot.senderReq) {
-      bridgeHttpStreams(key, slot, fileMeta);
-    } else {
-      slot.receiverTimer = setTimeout(() => {
-        if (streamPipes.get(key) === slot && !slot.piped) {
-          streamPipes.delete(key);
-          if (!res.headersSent) sendJson(res, req, 408, { error: "sender timeout" });
-        }
-      }, 30_000);
-    }
+  /* a peer that disconnects before pairing must leave the slot, otherwise the
+   * other side gets bridged into a dead socket and stalls forever */
+  res.on("close", () => {
+    const current = side === "sender" ? slot.senderRes : slot.receiverRes;
+    if (!slot.piped && current === res) dropSlotSide(key, slot, side);
+  });
+
+  if (slot.senderReq && slot.receiverRes) {
+    bridgeHttpStreams(key, slot, fileMeta);
     return;
   }
 
-  return sendJson(res, req, 405, { error: "method not allowed" });
+  const timer = setTimeout(() => {
+    const current = side === "sender" ? slot.senderRes : slot.receiverRes;
+    if (slot.piped || current !== res) return;
+    dropSlotSide(key, slot, side);
+    sendJson(res, req, 408, { error: side === "sender" ? "receiver timeout" : "sender timeout" });
+  }, STREAM_WAIT_MS);
+  if (side === "sender") slot.senderTimer = timer;
+  else slot.receiverTimer = timer;
+}
+
+/* RFC 5987 ext-value: encodeURIComponent leaves ' ( ) * unescaped, and a bare
+ * apostrophe breaks filename*= parsing in browsers */
+function contentDispositionName(name) {
+  const safe = encodeURIComponent(name || "download.bin").replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${safe}`;
 }
 
 function bridgeHttpStreams(key, slot, fileMeta) {
   if (slot.piped) return;
+  const { senderReq, senderRes, receiverReq, receiverRes } = slot;
+  if (!senderReq || !receiverRes) return;
   slot.piped = true;
   if (slot.senderTimer) clearTimeout(slot.senderTimer);
   if (slot.receiverTimer) clearTimeout(slot.receiverTimer);
   telemetry.activeStreams += 1;
 
-  const { senderReq, senderRes, receiverRes } = slot;
-  const safeName = encodeURIComponent(fileMeta.name || "download.bin");
   const headers = {
     "content-type": "application/octet-stream",
-    "content-disposition": `attachment; filename*=UTF-8''${safeName}`,
+    "content-disposition": contentDispositionName(fileMeta.name),
     "cache-control": "no-store",
     ...SECURITY_HEADERS,
-    ...corsHeaders(slot.receiverReq),
+    ...corsHeaders(receiverReq),
   };
   if (fileMeta.size > 0) headers["content-length"] = String(fileMeta.size);
 
   receiverRes.writeHead(200, headers);
   let moved = 0;
+  let senderEnded = false;
+
+  const cleanup = () => {
+    if (slot.cleaned) return;
+    slot.cleaned = true;
+    telemetry.activeStreams = Math.max(0, telemetry.activeStreams - 1);
+    if (streamPipes.get(key) === slot) streamPipes.delete(key);
+    if (moved > 0) saveDb();
+  };
 
   senderReq.on("data", (chunk) => {
     moved += chunk.length;
@@ -666,24 +771,15 @@ function bridgeHttpStreams(key, slot, fileMeta) {
 
   senderReq.pipe(receiverRes, { end: true });
 
-  const cleanup = () => {
-    if (slot.cleaned) return;
-    slot.cleaned = true;
-    telemetry.activeStreams = Math.max(0, telemetry.activeStreams - 1);
-    streamPipes.delete(key);
-    if (moved > 0) saveDb();
-  };
-
   senderReq.on("end", () => {
+    senderEnded = true;
     cleanup();
     try {
-      receiverRes.end();
-    } catch {}
-    try {
-      if (!senderRes.headersSent) {
+      if (!senderRes.headersSent && !senderRes.destroyed) {
         const body = JSON.stringify({ ok: true, bytes: moved });
         senderRes.writeHead(200, {
           "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
           ...corsHeaders(senderReq),
         });
         senderRes.end(body);
@@ -691,24 +787,45 @@ function bridgeHttpStreams(key, slot, fileMeta) {
     } catch {}
   });
 
-  senderReq.on("error", () => {
+  /* sender aborted mid-upload: the receiver must see a broken download, not a
+   * silently truncated "complete" file */
+  const senderGone = () => {
+    if (senderEnded) return;
     cleanup();
     try {
       receiverRes.destroy();
     } catch {}
-  });
+  };
+  senderReq.on("error", senderGone);
+  senderReq.on("close", senderGone);
 
+  receiverRes.on("error", () => {});
   receiverRes.on("close", () => {
     cleanup();
-    try {
-      senderReq.destroy();
-    } catch {}
+    /* only abort an upload that is still running — destroying a finished
+     * request used to kill the socket before the sender's 200 was flushed */
+    if (!senderEnded) {
+      try {
+        senderReq.destroy();
+      } catch {}
+    }
   });
 }
 
 /* ── http server + routes ───────────────────────────────────────────── */
+/* new URL() throws on request targets like "//" or "//:1". Outside a try that
+ * was an unhandled rejection — a single `GET //` took the whole process down. */
+function parseRequestUrl(raw) {
+  try {
+    return new URL(raw || "/", "http://localhost");
+  } catch {
+    return null;
+  }
+}
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, "http://localhost");
+  const url = parseRequestUrl(req.url);
+  if (!url) return sendJson(res, req, 400, { error: "bad request url" });
   const pathname = url.pathname.replace(/\/+$/, "") || "/";
   const origin = originOf();
   let m;
@@ -731,7 +848,7 @@ const server = http.createServer(async (req, res) => {
     ) {
       const code = m[1].toUpperCase();
       const idx = Number(m[2]);
-      return await handleDirectStream(req, res, code, idx, url);
+      return await handleDirectStream(req, res, code, idx);
     }
 
     /* ── system stats & telemetry dashboard ── */
@@ -900,7 +1017,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if ((m = pathname.match(/^\/api\/v1\/links\/([^/]+)$/))) {
-      const slug = decodeURIComponent(m[1]).toLowerCase();
+      const slug = decodeParam(m[1]).toLowerCase();
       const link = db.links[slug];
 
       if (req.method === "GET") {
@@ -921,7 +1038,7 @@ const server = http.createServer(async (req, res) => {
       if (!allowRate(req, "hit", 30, 60_000)) {
         return sendJson(res, req, 429, { error: "rate limit exceeded — slow down" });
       }
-      const slug = decodeURIComponent(m[1]).toLowerCase();
+      const slug = decodeParam(m[1]).toLowerCase();
       const link = db.links[slug];
       if (!link) return sendJson(res, req, 404, { error: "no such link" });
       link.clicks += 1;
@@ -933,7 +1050,7 @@ const server = http.createServer(async (req, res) => {
       if (!allowRate(req, "unlock", 20, 60_000)) {
         return sendJson(res, req, 429, { error: "too many password attempts — try again later" });
       }
-      const slug = decodeURIComponent(m[1]).toLowerCase();
+      const slug = decodeParam(m[1]).toLowerCase();
       const link = db.links[slug];
       if (!link) return sendJson(res, req, 404, { error: "no such link" });
       if (!link.password) return sendJson(res, req, 200, { url: link.url, unlocked: true });
@@ -1014,7 +1131,7 @@ const server = http.createServer(async (req, res) => {
 
     /* support both /api/v1/box/rooms/:code and /api/v1/rooms/:code */
     if ((m = pathname.match(/^\/api\/v1\/(?:box\/)?rooms\/([^/]+)$/))) {
-      const code = decodeURIComponent(m[1]).toUpperCase();
+      const code = decodeParam(m[1]).toUpperCase();
       const room = db.rooms[code];
 
       if (req.method === "GET") {
@@ -1080,10 +1197,20 @@ const server = http.createServer(async (req, res) => {
 
     return sendJson(res, req, 404, { error: "not found" });
   } catch (err) {
+    if (err instanceof HttpError) {
+      return sendJson(res, req, err.status, { error: err.message });
+    }
     if (err instanceof SyntaxError) {
       return sendJson(res, req, 400, { error: "body must be json" });
     }
     console.error("[koza]", err);
+    if (res.headersSent) {
+      /* a half-written response would otherwise hang the client */
+      try {
+        res.destroy();
+      } catch {}
+      return;
+    }
     return sendJson(res, req, 500, { error: "internal error" });
   }
 });
@@ -1126,6 +1253,14 @@ async function joinLine(ws, msg) {
     return sendWs(ws, { type: "error", reason: "wrong-password" });
   }
 
+  /* scrypt is async: the socket may have closed meanwhile (leaveLine already
+   * ran with no profile), or the room may have been deleted / expired. A
+   * closed socket registered here would linger in the line forever. */
+  if (ws.readyState !== 1 || ws.profile) return;
+  if (db.rooms[code] !== room) {
+    return sendWs(ws, { type: "error", reason: "no-room" });
+  }
+
   let line = lines.get(code);
   if (!line) {
     line = {
@@ -1160,16 +1295,21 @@ async function joinLine(ws, msg) {
     } catch {
       /* replacing a stale peer */
     }
+    /* Drop only lanes opened BEFORE this primary socket connected: a client
+     * opens its primary first and its lanes after, so fresh lanes (which can
+     * finish the async password check before the primary does) survive.
+     * Previously every lane was killed, breaking turbo on reconnect. */
     const staleLanes = role === "sender" ? line.senderLanes : line.receiverLanes;
     if (staleLanes) {
-      for (const lws of staleLanes) {
+      for (const lws of [...staleLanes]) {
+        if ((lws._seq || 0) > (ws._seq || 0)) continue;
+        staleLanes.delete(lws);
         try {
           clearWsPause(lws);
           lws.profile = null;
           lws.terminate();
         } catch {}
       }
-      staleLanes.clear();
     }
   }
   line[role] = ws;
@@ -1196,6 +1336,17 @@ function leaveLine(ws) {
   if (p.isLane) {
     line.senderLanes?.delete(ws);
     line.receiverLanes?.delete(ws);
+    /* a line that only ever had lanes (primary never joined) was never freed */
+    if (
+      !line.sender &&
+      !line.receiver &&
+      !line.senderLanes?.size &&
+      !line.receiverLanes?.size &&
+      lines.get(p.code) === line
+    ) {
+      lines.delete(p.code);
+      if ((line.bytesRelayed || 0) > 0) saveDb();
+    }
     return;
   }
   if (line[p.role] === ws) line[p.role] = null;
@@ -1210,12 +1361,15 @@ function leaveLine(ws) {
         lws.close();
       } catch {}
     }
-    lines.delete(p.code);
+    if (lines.get(p.code) === line) lines.delete(p.code);
     if (hadBytes) saveDb();
   }
 }
 
+let wsSeq = 0;
+
 wss.on("connection", (ws, req) => {
+  ws._seq = ++wsSeq; /* connection order, used to tell stale lanes from fresh ones */
   ws.isAlive = true;
   ws.profile = null;
   ws._req = { headers: req?.headers || {}, socket: req?.socket };
@@ -1347,8 +1501,10 @@ setInterval(() => {
 }, 25_000).unref();
 
 server.on("upgrade", (req, socket, head) => {
-  const { pathname } = new URL(req.url, "http://localhost");
-  if (pathname !== "/signal") return socket.destroy();
+  const url = parseRequestUrl(req.url);
+  /* a client resetting mid-handshake must not raise an unhandled 'error' */
+  socket.on("error", () => {});
+  if (!url || url.pathname.replace(/\/+$/, "") !== "/signal") return socket.destroy();
   if (!allowRate(req, "ws-connect", 120, 60_000)) {
     socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
     return socket.destroy();
@@ -1366,8 +1522,19 @@ server.listen(PORT, () => {
   if (!ADMIN_KEY) console.warn("[koza] KOZA_ADMIN_KEY empty — admin endpoints are disabled");
 });
 
-process.on("SIGTERM", () => {
+/* Ctrl+C in dev used to skip the final flush and lose recent clicks/links. */
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   saveDbSync();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+
+/* Last-resort guard: log instead of dying on a stray rejected promise. */
+process.on("unhandledRejection", (err) => {
+  console.error("[koza] unhandled rejection:", err);
 });

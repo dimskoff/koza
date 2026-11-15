@@ -192,7 +192,13 @@ export function subscribeTransfers(onChange: () => void): () => void {
 }
 
 export function getTransfersSnapshot(): TransferSummary[] {
-  const raw = window.localStorage.getItem(STORE_KEY);
+  let raw: string | null = null;
+  try {
+    /* throws when storage is disabled (Safari private mode, blocked cookies) */
+    raw = window.localStorage.getItem(STORE_KEY);
+  } catch {
+    raw = null;
+  }
   if (raw !== cachedJson) {
     cachedJson = raw;
     try {

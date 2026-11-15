@@ -1,6 +1,6 @@
 {
   "name": "koza",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "Privacy-first URL shortener and peer-to-peer file transfer",
   "author": "dimskoff",

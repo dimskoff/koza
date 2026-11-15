@@ -1,6 +1,6 @@
 {
   "name": "koza-server",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "koza backend — shortener api, room registry and p2p signaling in one file",
   "author": "dimskoff",
