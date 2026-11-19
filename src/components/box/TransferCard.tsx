@@ -471,14 +471,6 @@ export function TransferCard() {
                 : "hover:bg-white/[0.05]"
             }`}
           >
-            <div
-              className={`mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04] transition-transform duration-150 ${
-                dragging ? "scale-110" : ""
-              }`}
-              aria-hidden="true"
-            >
-              <Zap className="h-5 w-5 text-[var(--kz-coral)]" />
-            </div>
             <p className="text-[16px] font-medium text-[var(--kz-mist)]">Drop files here</p>
             <p className="kz-mono mt-1 text-[12px] text-[var(--kz-smoke)]">
               or press to browse · any type · stays on your device

@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { AtSign, Sparkles, Zap } from "lucide-react";
+import { AtSign, Sparkles } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
 
 /* Skeletons are pixel twins of the real cards: identical markup and classes,
@@ -69,9 +69,6 @@ export function TransferSkeleton() {
       </div>
       <div className="p-5 sm:p-6">
         <div className="kz-inset relative flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-9 text-center">
-          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04]">
-            <Zap className="h-5 w-5 animate-pulse text-[var(--kz-coral)] opacity-60" />
-          </div>
           <p className="text-[16px] font-medium">
             <Ghost>Drop files here</Ghost>
           </p>
