@@ -3,7 +3,7 @@
 
 import { getSite } from "@/lib/site";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Copy, ExternalLink, Lock, QrCode, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -51,6 +51,16 @@ function FaviconAvatar({ url }: { url: string }) {
 export function RecentLinks() {
   const links = useSyncExternalStore(subscribeLinks, getLinksSnapshot, getServerLinks);
   const [qrLink, setQrLink] = useState<KozaLink | null>(null);
+
+  /* The list only exists in localStorage, so it shows up right after
+     hydration. The first batch cascades in; links added later slide in alone. */
+  const [cascade, setCascade] = useState(true);
+  const hasLinks = links.length > 0;
+  useEffect(() => {
+    if (!hasLinks) return;
+    const t = window.setTimeout(() => setCascade(false), 700);
+    return () => window.clearTimeout(t);
+  }, [hasLinks]);
 
   /* Keyed by slug list so click-count updates do NOT re-trigger the fetch in a loop */
   const slugsKey = links.map((l) => l.slug).join(",");
@@ -100,12 +110,28 @@ export function RecentLinks() {
   if (links.length === 0) return null;
 
   return (
-    <section aria-label="Your links, local to this browser">
+    <MotionConfig reducedMotion="user">
+    <motion.section
+      aria-label="Your links, local to this browser"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+    >
       <div className="kz-edge kz-scroll max-h-44 overflow-y-auto sm:max-h-52">
         <ul className="divide-y divide-[var(--kz-hairline)]" aria-label="Saved short links">
-          {links.map((link) => (
-            <li
+          <AnimatePresence initial={true}>
+          {links.map((link, i) => (
+            <motion.li
               key={link.id}
+              layout="position"
+              initial={{ opacity: 0, y: 8, filter: "blur(4px)" }}
+              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+              exit={{ opacity: 0, x: -12, transition: { duration: 0.18 } }}
+              transition={{
+                duration: 0.32,
+                ease: [0.22, 1, 0.36, 1],
+                delay: cascade ? 0.06 + Math.min(i, 5) * 0.055 : 0,
+              }}
               className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.025]"
             >
               <FaviconAvatar url={link.url} />
@@ -155,12 +181,15 @@ export function RecentLinks() {
                   <Trash2 className="h-3.5 w-3.5" />
                 </IconBtn>
               </div>
-            </li>
+            </motion.li>
           ))}
+          </AnimatePresence>
         </ul>
       </div>
+    </motion.section>
 
-      {/* QR modal */}
+      {/* QR modal — outside the animated section: a transformed ancestor would
+          trap position:fixed inside it */}
       <AnimatePresence>
         {qrLink && (
           <motion.div
@@ -194,7 +223,7 @@ export function RecentLinks() {
           </motion.div>
         )}
       </AnimatePresence>
-    </section>
+    </MotionConfig>
   );
 }
 
