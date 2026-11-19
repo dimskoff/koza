@@ -465,12 +465,20 @@ export function TransferCard() {
             role="button"
             tabIndex={0}
             aria-label="Drop files here or press Enter to browse"
-            className={`kz-inset relative flex cursor-pointer flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-[66px] text-center transition-colors duration-150 ${
+            className={`kz-inset relative flex cursor-pointer flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-9 text-center transition-colors duration-150 ${
               dragging
                 ? "!border-[var(--kz-coral)] bg-[rgba(255,99,99,0.06)]"
                 : "hover:bg-white/[0.05]"
             }`}
           >
+            <div
+              className={`mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04] transition-transform duration-150 ${
+                dragging ? "scale-110" : ""
+              }`}
+              aria-hidden="true"
+            >
+              <Zap className="h-5 w-5 text-[var(--kz-coral)]" />
+            </div>
             <p className="text-[16px] font-medium text-[var(--kz-mist)]">Drop files here</p>
             <p className="kz-mono mt-1 text-[12px] text-[var(--kz-smoke)]">
               or press to browse · any type · stays on your device

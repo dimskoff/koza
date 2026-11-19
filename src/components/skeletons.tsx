@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { AtSign, Sparkles } from "lucide-react";
+import { AtSign, Sparkles, Zap } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
 
 /* Skeletons are pixel twins of the real cards: identical markup and classes,
@@ -68,7 +68,10 @@ export function TransferSkeleton() {
         <span className="flex items-center gap-3" />
       </div>
       <div className="p-5 sm:p-6">
-        <div className="kz-inset relative flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-[66px] text-center">
+        <div className="kz-inset relative flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-9 text-center">
+          <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--kz-hairline)] bg-white/[0.04]">
+            <Zap className="h-5 w-5 animate-pulse text-[var(--kz-coral)] opacity-60" />
+          </div>
           <p className="text-[16px] font-medium">
             <Ghost>Drop files here</Ghost>
           </p>
@@ -88,7 +91,7 @@ export function TransferSkeleton() {
    so the arriving page starts on the very same skeleton and crossfades into
    the real card — no flash, no hydration mismatch. */
 
-export function ArrivalVeil({ skeleton, children }: { skeleton: ReactNode; children: ReactNode }) {
+export function useArrivalRelease() {
   useEffect(() => {
     const root = document.documentElement;
     if (!("arrive" in root.dataset)) return;
@@ -100,7 +103,10 @@ export function ArrivalVeil({ skeleton, children }: { skeleton: ReactNode; child
       root.removeAttribute("data-arrive");
     };
   }, []);
+}
 
+export function ArrivalVeil({ skeleton, children }: { skeleton: ReactNode; children: ReactNode }) {
+  useArrivalRelease();
   return (
     <div className="relative w-full">
       <div className="kz-veil-content">{children}</div>
