@@ -467,3 +467,46 @@ html[data-arrive] .kz-veil-content {
      centered block vs. the box page and make it jump after a switch */
   top: 1.25rem;
 }
+/* ── ghost mode: a page rendered as its own skeleton (components/PageGhost.tsx)
+   Layout is untouched — only colors change — so the skeleton is guaranteed
+   to be exactly the size of the real page. Headlines stay visible. */
+@keyframes kz-ghost-pulse {
+  0%, 100% { background-color: rgba(255, 255, 255, 0.05); }
+  50% { background-color: rgba(255, 255, 255, 0.09); }
+}
+.kz-ghost {
+  pointer-events: none;
+  user-select: none;
+}
+.kz-ghost *:not(h1, h1 *) {
+  color: transparent !important;
+  text-shadow: none !important;
+}
+.kz-ghost svg {
+  opacity: 0;
+}
+.kz-ghost :is(p, h2, pre, kbd, span.kz-mono, [data-slot="badge"]):not(h1 *) {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  border-color: transparent !important;
+  border-radius: 6px;
+  animation: kz-ghost-pulse 1.6s ease-in-out infinite;
+}
+/* no double bars for things nested inside an already-ghosted block */
+.kz-ghost :is(p, h2, pre, span.kz-mono) :is(code, span, kbd) {
+  background: transparent !important;
+  animation: none !important;
+}
+.kz-ghost :is(.kz-cta, .kz-neutral-btn) {
+  background: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: none !important;
+}
+.kz-ghost :is([class*="bg-emerald"], [class*="bg-red"], [class*="bg-amber"]) {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+.kz-ghost .animate-ping {
+  visibility: hidden;
+}
+/* page-level veil covers the whole main — square corners */
+.kz-veil-page > * {
+  border-radius: 0;
+}

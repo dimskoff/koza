@@ -5,17 +5,23 @@ import { Headline } from "../Headline";
 import { KozaToaster } from "../KozaToaster";
 import { ArrivalVeil, ShortenerSkeleton, TransferSkeleton } from "../skeletons";
 import { useProductTransition } from "../transition";
+import { GhostMain } from "../PageGhost";
+import { isSubPage } from "@/lib/pages";
 import { Shortener } from "./Shortener";
 import { RecentLinks } from "./RecentLinks";
 import { KozaFooter, KozaNav } from "./Sections";
 
 export function KozaSite() {
-  const leavingForBox = useProductTransition() === "box";
+  const target = useProductTransition();
+  const leavingForBox = target === "box";
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
       <KozaToaster />
       <KozaNav />
+      {isSubPage(target) ? (
+        <GhostMain page={target} />
+      ) : (
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <Headline product={leavingForBox ? "box" : "url"} />
 
@@ -41,6 +47,7 @@ export function KozaSite() {
           </div>
         </div>
       </main>
+      )}
       <KozaFooter />
     </div>
   );

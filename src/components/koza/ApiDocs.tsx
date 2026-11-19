@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { getSite } from "@/lib/site";
 import { KozaFooter, KozaNav } from "./Sections";
+import { PageArrival } from "../PageGhost";
 
 interface Endpoint {
   id: string;
@@ -305,16 +306,15 @@ function EndpointCard({
   );
 }
 
-export function ApiDocs() {
+export const DOCS_MAIN_CLASS = "mx-auto w-full max-w-xl flex-1 px-4 pt-10 pb-16 sm:pt-14";
+
+/** the docs body — also rendered in ghost mode as this page's skeleton */
+export function ApiDocsContent() {
   const [openKoza, setOpenKoza] = useState<string | null>("shorten");
   const [openBox, setOpenBox] = useState<string | null>(null);
 
   return (
-    <div className="kz-root flex min-h-dvh flex-col">
-      <KozaToaster />
-      <KozaNav />
-
-      <main className="mx-auto w-full max-w-xl flex-1 px-4 pt-10 pb-16 sm:pt-14">
+    <>
         <div className="flex flex-col items-center text-center">
           <h1 className="text-balance text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
             REST{" "}
@@ -378,8 +378,20 @@ export function ApiDocs() {
             ))}
           </div>
         </section>
-      </main>
+    </>
+  );
+}
 
+export function ApiDocs() {
+  return (
+    <div className="kz-root flex min-h-dvh flex-col">
+      <KozaToaster />
+      <KozaNav />
+      <PageArrival page="docs">
+        <main className={DOCS_MAIN_CLASS}>
+          <ApiDocsContent />
+        </main>
+      </PageArrival>
       <KozaFooter />
     </div>
   );

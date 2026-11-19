@@ -5,7 +5,7 @@ import { getSite } from "@/lib/site";
 import { ArrowUpRight, Loader2 } from "lucide-react";
 import { BoxMark, LinkMark } from "../marks";
 import { GithubLink } from "../GithubLink";
-import { getProductUrl, prefetchProduct, switchTo, useProductTransition } from "../transition";
+import { getProductUrl, onNavClick, prefetchProduct, switchTo, useProductTransition } from "../transition";
 
 /* ── Slim nav for box (unified max-w-xl) ───────────── */
 export function BoxNav() {
@@ -18,6 +18,7 @@ export function BoxNav() {
       <div className="kz-glass mx-auto flex h-12 w-full max-w-xl items-center justify-between rounded-[14px] pl-4 pr-2">
         <a
           href={homeUrl}
+          onClick={onNavClick("box")}
           className="flex items-center gap-2.5 outline-none"
           aria-label={`${getSite().boxHost} home`}
         >
@@ -71,15 +72,15 @@ export function BoxFooter() {
   return (
     <footer className="kz-hairline-t">
       <div className="kz-mono mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-[var(--kz-smoke)]">
-        <a href="/policy" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
+        <a href="/policy" onClick={onNavClick("policy")} className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
           policy <ArrowUpRight className="h-3 w-3" />
         </a>
         <div className="flex items-center gap-1">
           <GithubLink />
-          <a href="/status" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
+          <a href="/status" onClick={onNavClick("status")} className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
             status <ArrowUpRight className="h-3 w-3" />
           </a>
-          <a href="/docs" className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
+          <a href="/docs" onClick={onNavClick("docs")} className="kz-ghost-btn flex items-center gap-0.5 rounded-md px-1.5 py-1">
             api <ArrowUpRight className="h-3 w-3" />
           </a>
           <p className="px-1.5">© 2026 koza</p>

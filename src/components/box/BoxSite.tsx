@@ -5,16 +5,22 @@ import { Headline } from "../Headline";
 import { KozaToaster } from "../KozaToaster";
 import { ArrivalVeil, ShortenerSkeleton, TransferSkeleton } from "../skeletons";
 import { useProductTransition } from "../transition";
+import { GhostMain } from "../PageGhost";
+import { isSubPage } from "@/lib/pages";
 import { TransferCard } from "./TransferCard";
 import { BoxFooter, BoxNav } from "./Sections";
 
 export function BoxSite() {
-  const leavingForUrl = useProductTransition() === "url";
+  const target = useProductTransition();
+  const leavingForUrl = target === "url";
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
       <KozaToaster />
       <BoxNav />
+      {isSubPage(target) ? (
+        <GhostMain page={target} />
+      ) : (
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <Headline product={leavingForUrl ? "url" : "box"} />
 
@@ -28,6 +34,7 @@ export function BoxSite() {
           )}
         </div>
       </main>
+      )}
       <BoxFooter />
     </div>
   );

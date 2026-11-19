@@ -4,7 +4,6 @@
 import { getSite } from "@/lib/site";
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
 import { BoxMark, CubeMark, LinkMark } from "../marks";
 
 interface ServiceHealth {
@@ -37,7 +36,9 @@ function fmtUptime(s: number): string {
   return `${h}h ${m}m`;
 }
 
-export function StatusDashboard() {
+/** `ghost`: render the exact layout with no data and no polling — used as the
+    page's own skeleton during page transitions */
+export function StatusDashboard({ ghost = false }: { ghost?: boolean }) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +68,7 @@ export function StatusDashboard() {
   }, []);
 
   useEffect(() => {
+    if (ghost) return;
     /* first poll is scheduled, not called inline — keeps state updates out of
      * the effect body (react-hooks/set-state-in-effect) */
     const first = setTimeout(() => void fetchStats(false), 0);
@@ -75,7 +77,7 @@ export function StatusDashboard() {
       clearTimeout(first);
       clearInterval(id);
     };
-  }, [fetchStats]);
+  }, [fetchStats, ghost]);
 
   const isServiceOk = (v: ServiceHealth | string | undefined) =>
     online === true &&
@@ -179,23 +181,13 @@ export function StatusDashboard() {
 
         {/* Service list */}
         <div className="p-5">
-          {loading && !stats ? (
-            <div className="kz-inset divide-y divide-[var(--kz-hairline)]">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="flex items-center justify-between px-4 py-3.5">
-                  <div className="flex items-center gap-3">
-                    <Skeleton className="h-8 w-8 rounded-lg bg-white/[0.05]" />
-                    <div className="space-y-1.5">
-                      <Skeleton className="h-3.5 w-24 rounded-md bg-white/[0.06]" />
-                      <Skeleton className="h-2.5 w-36 rounded-md bg-white/[0.04]" />
-                    </div>
-                  </div>
-                  <Skeleton className="h-3.5 w-16 rounded-md bg-white/[0.05]" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <ul className="kz-inset divide-y divide-[var(--kz-hairline)]">
+          {/* while loading, the same rows render in ghost mode — identical size,
+              so nothing shifts when the data arrives */}
+          <ul
+              className={`kz-inset divide-y divide-[var(--kz-hairline)] ${
+                loading && !stats ? "kz-ghost" : ""
+              }`}
+            >
               {services.map((s) => (
                 <li
                   key={s.id}
@@ -225,8 +217,7 @@ export function StatusDashboard() {
                   </span>
                 </li>
               ))}
-            </ul>
-          )}
+          </ul>
         </div>
 
         {/* Bottom strip */}
