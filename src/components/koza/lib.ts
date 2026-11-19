@@ -81,22 +81,50 @@ export function isSlugTaken(slug: string): boolean {
   return links.some((l) => l.slug === slug);
 }
 
+/* Mirrors server/server.js: web links plus any app scheme (happ://, tg://,
+   mailto:, …) except the ones a browser would execute. */
+const BLOCKED_SCHEMES = new Set([
+  "javascript:",
+  "vbscript:",
+  "data:",
+  "blob:",
+  "file:",
+  "filesystem:",
+  "about:",
+  "view-source:",
+  "chrome:",
+  "edge:",
+]);
+const SCHEME_URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const BARE_SCHEME_RE = /^(mailto|tel|sms|magnet|geo):/i;
+
+export function isWebUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
 export function normalizeUrl(raw: string): string | null {
   let value = raw.trim();
-  if (!value) return null;
-  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  if (!value || value.length > 2048 || /[\s\u0000-\u001f\u007f]/.test(value)) return null;
+  if (!SCHEME_URL_RE.test(value) && !BARE_SCHEME_RE.test(value)) value = `https://${value}`;
   try {
     const parsed = new URL(value);
-    if (!parsed.hostname.includes(".") || /\s/.test(parsed.hostname)) return null;
-    return parsed.toString();
+    if (BLOCKED_SCHEMES.has(parsed.protocol.toLowerCase())) return null;
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      if (!parsed.hostname.includes(".") && !parsed.hostname.startsWith("[")) return null;
+      return parsed.toString();
+    }
+    return value;
   } catch {
     return null;
   }
 }
 
+/* "https://www.github.com/x" → "github.com"; "happ://add/abc" → "happ://add" */
 export function hostOf(url: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    const u = new URL(url);
+    if (u.protocol === "http:" || u.protocol === "https:") return u.hostname.replace(/^www\./, "");
+    return `${u.protocol}//${u.hostname}`.replace(/\/\/$/, "");
   } catch {
     return url;
   }
@@ -105,7 +133,8 @@ export function hostOf(url: string): string {
 /* Suggest a slug from the destination URL: claude.ai/chat → claude */
 export function suggestSlug(url: string): string {
   try {
-    const host = new URL(url).hostname.replace(/^www\./, "");
+    const u = new URL(url);
+    const host = isWebUrl(url) ? u.hostname.replace(/^www\./, "") : u.protocol.replace(":", "");
     const base = host.split(".")[0].replace(/[^a-z0-9]/gi, "").toLowerCase();
     return base.slice(0, 24);
   } catch {

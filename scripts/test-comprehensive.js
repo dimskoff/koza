@@ -451,6 +451,14 @@ function wsOpen(url, onBinary) {
   ok("Private address destination rejected (422)", (await shorten("http://192.168.1.1/admin")).status === 422);
   ok("Embedded credentials rejected (422)", (await shorten("https://user:pass@example.com")).status === 422);
   ok("javascript: scheme rejected (400)", (await shorten("javascript:alert(1)")).status === 400);
+  ok("javascript:// scheme rejected (400)", (await shorten("javascript://x%0aalert(1)")).status === 400);
+  ok("data: scheme rejected (400)", (await shorten("data://text/html,hi")).status === 400);
+  const appRes = await shorten("happ://add/abc123?x=1");
+  const appJson = await appRes.json();
+  ok("App scheme accepted as typed (201)", appRes.status === 201 && appJson.link?.url === "happ://add/abc123?x=1");
+  const appRedirect = await fetch(`${HTTP}/${appJson.link?.slug}`, { redirect: "manual" });
+  ok("App scheme link redirects (302 → happ://)", appRedirect.status === 302 && appRedirect.headers.get("location") === "happ://add/abc123?x=1");
+  ok("mailto: accepted (201)", (await shorten("mailto:hi@example.com")).status === 201);
   const evilCors = await fetch(`${HTTP}/api/v1/stats`, { headers: { origin: "https://evil.example" } });
   ok("Foreign Origin gets no CORS header", evilCors.headers.get("access-control-allow-origin") === null);
   const qsPw = await fetch(`${HTTP}/signal/stream/${code5}/0?password=x`, { method: "POST" });

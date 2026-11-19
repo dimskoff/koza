@@ -244,17 +244,42 @@ async function verifyPass(stored, pw) {
 
 const MAX_URL_LENGTH = 2048;
 
+/* Any app scheme is allowed (happ://, tg://, steam://, mailto:, …) except the
+ * ones a browser would execute or resolve locally. */
+const BLOCKED_SCHEMES = new Set([
+  "javascript:",
+  "vbscript:",
+  "data:",
+  "blob:",
+  "file:",
+  "filesystem:",
+  "about:",
+  "view-source:",
+  "chrome:",
+  "edge:",
+]);
+const SCHEME_URL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const BARE_SCHEME_RE = /^(mailto|tel|sms|magnet|geo):/i;
+
+const isWebUrl = (u) => u.protocol === "http:" || u.protocol === "https:";
+
 function normalizeUrl(raw) {
   if (typeof raw !== "string") return null;
   let value = raw.trim();
   if (!value || value.length > MAX_URL_LENGTH) return null;
-  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return null;
+  /* no scheme typed → assume a web address */
+  if (!SCHEME_URL_RE.test(value) && !BARE_SCHEME_RE.test(value)) value = `https://${value}`;
   try {
     const u = new URL(value);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname || /\s/.test(u.hostname)) return null;
-    if (!u.hostname.includes(".") && !u.hostname.startsWith("[")) return null;
-    return u.toString();
+    if (BLOCKED_SCHEMES.has(u.protocol.toLowerCase())) return null;
+    if (isWebUrl(u)) {
+      if (!u.hostname) return null;
+      if (!u.hostname.includes(".") && !u.hostname.startsWith("[")) return null;
+      return u.toString();
+    }
+    /* custom scheme: keep exactly what the user typed (URL() may re-encode it) */
+    return value;
   } catch {
     return null;
   }
@@ -340,6 +365,12 @@ async function destinationError(normalized) {
   const u = new URL(normalized);
   const hostname = u.hostname.toLowerCase();
   if (u.username || u.password) return "links with embedded credentials are not allowed";
+  if (!isWebUrl(u)) {
+    /* app links (happ://…): no host to check beyond the blocklist */
+    const blocked = [...BLOCKED_DOMAINS_ENV, ...fileBlocklist()];
+    if (hostname && blocked.some((d) => domainMatches(hostname, d))) return "this destination is blocked";
+    return null;
+  }
   if (isPrivateHost(hostname)) return "private or local addresses cannot be shortened";
   const own = [HOST, BOX_HOST].map((h) => h.split(":")[0]);
   if (own.some((d) => domainMatches(hostname, d))) return "links to this service cannot be shortened";

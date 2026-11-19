@@ -13,6 +13,7 @@ import {
   getLinksSnapshot,
   getServerLinks,
   hostOf,
+  isWebUrl,
   removeLink,
   shortUrlOf,
   subscribeLinks,
@@ -26,7 +27,7 @@ function FaviconAvatar({ url }: { url: string }) {
   const host = hostOf(url);
   const letter = (host.charAt(0) || "?").toUpperCase();
   const faviconUrl =
-    host && host !== "link"
+    host && isWebUrl(url)
       ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`
       : undefined;
 
