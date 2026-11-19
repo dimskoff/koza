@@ -176,6 +176,20 @@ export function Shortener() {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         void shorten();
+        return;
+      }
+      /* Enter anywhere on the page jumps into the link field, so the flow is
+         just: Enter → paste → Enter. Buttons/links keep their own Enter. */
+      const interactive =
+        target && (target.tagName === "BUTTON" || target.tagName === "A" || target.tagName === "SELECT");
+      if (e.key === "Enter" && !typing && !interactive && !e.altKey && !e.shiftKey && !e.repeat) {
+        if (phase === "idle") {
+          e.preventDefault();
+          inputRef.current?.focus();
+        } else if (phase === "done") {
+          e.preventDefault();
+          reset();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
