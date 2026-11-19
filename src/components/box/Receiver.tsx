@@ -209,9 +209,10 @@ export function Receiver({ code }: { code: string }) {
             setStage("error");
           }
         },
+        /* fires on every mode change announced by the sender — only the badge
+           updates; the transfer clock keeps running from the start */
         onChannelOpen: (mode) => {
           if (mode) setTransport(mode);
-          t0.current = Date.now();
         },
         onFileStart: (index) => {
           movedRef.current = { ...movedRef.current, [index]: movedRef.current[index] ?? 0 };
