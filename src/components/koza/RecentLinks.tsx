@@ -117,16 +117,18 @@ export function RecentLinks() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="kz-edge kz-scroll max-h-44 overflow-y-auto sm:max-h-52">
+      <div className="kz-edge kz-scroll max-h-44 overflow-x-hidden overflow-y-auto sm:max-h-52">
         <ul className="divide-y divide-[var(--kz-hairline)]" aria-label="Saved short links">
           <AnimatePresence initial={true}>
           {links.map((link, i) => (
             <motion.li
               key={link.id}
               layout="position"
-              initial={{ opacity: 0, y: 8, filter: "blur(4px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              exit={{ opacity: 0, x: -12, transition: { duration: 0.18 } }}
+              /* no y/x offsets on rows: a translated row pokes out of the
+                 scroll box and flashes a scrollbar for a frame */
+              initial={{ opacity: 0, filter: "blur(4px)" }}
+              animate={{ opacity: 1, filter: "blur(0px)" }}
+              exit={{ opacity: 0, filter: "blur(4px)", transition: { duration: 0.18 } }}
               transition={{
                 duration: 0.32,
                 ease: [0.22, 1, 0.36, 1],
