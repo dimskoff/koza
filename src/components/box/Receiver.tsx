@@ -8,7 +8,9 @@ import {
   ArrowRight,
   Check,
   Download,
+  FileArchive,
   KeyRound,
+  Loader2,
   Lock,
   RotateCcw,
   Timer,
@@ -26,6 +28,7 @@ import {
 } from "./visuals";
 import { switchTo } from "../transition";
 import { BoxReceiver, computeTransferFingerprint, saveBlob, type TransportMode } from "./webrtc";
+import { buildZip, canZip } from "./zip";
 import { TransportBadge } from "./TransportBadge";
 import {
   fmtDuration,
@@ -278,23 +281,30 @@ export function Receiver({ code }: { code: string }) {
     [code, offer, totalBytes],
   );
 
-  const downloadReceipt = () => {
-    if (!offer) return;
-    const lines = [
-      "koza box · transfer receipt",
-      `room: ${code.toUpperCase()}`,
-      `fingerprint: ${offer.fingerprint}`,
-      `received: ${offer.files.length} file(s) · ${prettySize(totalBytes)} in ${Math.max(1, Math.round(receivedFor / 1000))}s`,
-      "",
-      ...offer.files.map((f) => `  ${f.name} — ${prettySize(f.size)}`),
-      "",
-      "bytes travelled peer-to-peer · nothing was stored in between",
-    ];
-    saveBlob(
-      new Blob([lines.join("\n")], { type: "text/plain" }),
-      `koza-box-${code.toUpperCase()}.txt`,
-    );
-    toast.success("Receipt saved");
+  /* save every received file again, one by one (small gap so the browser
+     does not treat a burst of downloads as spam and block it) */
+  const downloadAll = () => {
+    const files = [...received].sort((a, b) => a.index - b.index);
+    files.forEach((f, i) => window.setTimeout(() => saveBlob(f.blob, f.name), i * 350));
+  };
+
+  const [zipping, setZipping] = useState(false);
+  const downloadZip = async () => {
+    if (zipping || received.length === 0) return;
+    const files = [...received].sort((a, b) => a.index - b.index);
+    if (!canZip(files)) {
+      toast.error("Too large for a zip", { description: "Use Download to save the files one by one." });
+      return;
+    }
+    setZipping(true);
+    try {
+      const zip = await buildZip(files.map((f) => ({ name: f.name, blob: f.blob })));
+      saveBlob(zip, `koza-${code.toUpperCase()}.zip`);
+    } catch {
+      toast.error("Could not build the zip");
+    } finally {
+      setZipping(false);
+    }
   };
 
   const etaMs = speed > 0 ? ((totalBytes - totalMoved) / speed) * 1000 : 0;
@@ -673,16 +683,23 @@ export function Receiver({ code }: { code: string }) {
 
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <button
-                      onClick={downloadReceipt}
-                      className="kz-neutral-btn flex h-12 cursor-pointer items-center justify-center gap-2 text-sm"
+                      onClick={downloadAll}
+                      disabled={received.length === 0}
+                      className="kz-neutral-btn flex h-12 cursor-pointer items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <Download className="h-4 w-4" /> Save receipt
+                      <Download className="h-4 w-4" /> Download
                     </button>
                     <button
-                      onClick={() => switchTo("box")}
-                      className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm"
+                      onClick={() => void downloadZip()}
+                      disabled={received.length === 0 || zipping}
+                      className="kz-ghost-btn flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border border-[var(--kz-hairline)] text-sm disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Open box <ArrowRight className="h-4 w-4" />
+                      {zipping ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <FileArchive className="h-4 w-4" />
+                      )}
+                      Download zip
                     </button>
                   </div>
                 </motion.div>
