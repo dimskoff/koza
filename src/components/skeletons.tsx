@@ -68,7 +68,7 @@ export function TransferSkeleton() {
         <span className="flex items-center gap-3" />
       </div>
       <div className="p-5 sm:p-6">
-        <div className="kz-inset relative flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-9 text-center">
+        <div className="kz-inset relative flex flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-[66px] text-center">
           <p className="text-[16px] font-medium">
             <Ghost>Drop files here</Ghost>
           </p>

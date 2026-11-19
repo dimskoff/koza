@@ -465,7 +465,7 @@ export function TransferCard() {
             role="button"
             tabIndex={0}
             aria-label="Drop files here or press Enter to browse"
-            className={`kz-inset relative flex cursor-pointer flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-9 text-center transition-colors duration-150 ${
+            className={`kz-inset relative flex cursor-pointer flex-col items-center justify-center border border-dashed border-[var(--kz-hairline-strong)] px-6 py-[66px] text-center transition-colors duration-150 ${
               dragging
                 ? "!border-[var(--kz-coral)] bg-[rgba(255,99,99,0.06)]"
                 : "hover:bg-white/[0.05]"
