@@ -2,7 +2,7 @@
 "use client";
 
 import { KozaToaster } from "../KozaToaster";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
@@ -29,6 +29,7 @@ import {
 import { switchTo } from "../transition";
 import { BoxReceiver, computeTransferFingerprint, saveBlob, type TransportMode } from "./webrtc";
 import { buildZip, canZip } from "./zip";
+import { isPreviewableImage, PhotoGallery } from "./PhotoGallery";
 import { TransportBadge } from "./TransportBadge";
 import {
   fmtDuration,
@@ -162,6 +163,10 @@ export function Receiver({ code }: { code: string }) {
   const overall = totalBytes > 0 ? Math.min(100, (totalMoved / totalBytes) * 100) : 0;
   const needsPw = Boolean(offer?.password);
   const doneCount = received.length;
+  /* photos are previewed in the page instead of being dropped into Downloads */
+  const photos = useMemo(() => received.filter((f) => isPreviewableImage(f.name, f.type)), [received]);
+  const otherFiles = useMemo(() => received.filter((f) => !isPreviewableImage(f.name, f.type)), [received]);
+  const allPhotos = Boolean(offer?.files.length) && Boolean(offer?.files.every((f) => isPreviewableImage(f.name)));
 
   const stopClock = () => {
     if (tick.current !== null) {
@@ -243,7 +248,7 @@ export function Receiver({ code }: { code: string }) {
           setReceived([...receivedRef.current]);
           movedRef.current = { ...movedRef.current, [index]: file.size };
           setMovedByIdx({ ...movedRef.current });
-          saveBlob(file.blob, file.name);
+          if (!isPreviewableImage(file.name, file.type)) saveBlob(file.blob, file.name);
         },
         onAllDone: () => {
           stopClock();
@@ -254,7 +259,9 @@ export function Receiver({ code }: { code: string }) {
           engineRef.current = null;
           if (eng) window.setTimeout(() => eng.dispose(), 600);
           toast.success("Delivered", {
-            description: "The files have been saved to your device.",
+            description: receivedRef.current.every((f) => isPreviewableImage(f.name, f.type))
+              ? "Tap a photo to view it full size."
+              : "The files have been saved to your device.",
           });
         },
         onError: (reason) => {
@@ -280,6 +287,16 @@ export function Receiver({ code }: { code: string }) {
     },
     [code, offer, totalBytes],
   );
+
+  /* photo-only rooms without a password open straight into the preview — the
+     friend lands on the link and simply sees the pictures */
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (stage !== "offer" || !offer || offer.password || !allPhotos || autoStarted.current) return;
+    autoStarted.current = true;
+    const t = window.setTimeout(() => startReceive(""), 150);
+    return () => window.clearTimeout(t);
+  }, [stage, offer, allPhotos, startReceive]);
 
   /* save every received file again, one by one (small gap so the browser
      does not treat a burst of downloads as spam and block it) */
@@ -559,7 +576,9 @@ export function Receiver({ code }: { code: string }) {
                       className="kz-cta mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
                     >
                       <Download className="h-4 w-4" />
-                      Download {offer.files.length > 1 ? "files" : "file"}
+                      {allPhotos
+                        ? `View ${offer.files.length > 1 ? "photos" : "photo"}`
+                        : `Download ${offer.files.length > 1 ? "files" : "file"}`}
                       <ArrowRight className="h-4 w-4" />
                     </button>
                   )}
@@ -589,6 +608,11 @@ export function Receiver({ code }: { code: string }) {
                     doneLabel="received"
                     caption={`${offer.files.length} file${offer.files.length > 1 ? "s" : ""} · ${doneCount} saved · don't close tab`}
                   />
+                  {photos.length > 0 && (
+                    <div className="mt-3">
+                      <PhotoGallery items={photos} onDownload={(f) => saveBlob(f.blob, f.name)} />
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -652,9 +676,15 @@ export function Receiver({ code }: { code: string }) {
                     </div>
                   </div>
 
-                  {received.length > 0 && (
+                  {photos.length > 0 && (
+                    <div className="mt-3">
+                      <PhotoGallery items={photos} onDownload={(f) => saveBlob(f.blob, f.name)} />
+                    </div>
+                  )}
+
+                  {otherFiles.length > 0 && (
                     <ul className="kz-inset mt-3 divide-y divide-[var(--kz-hairline)]">
-                      {received.map((f) => (
+                      {otherFiles.map((f) => (
                         <li
                           key={`${f.index}-${f.name}`}
                           className="flex items-center gap-3 px-3.5 py-2.5"
