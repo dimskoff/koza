@@ -84,7 +84,8 @@ function wsOpen(url, onBinary) {
   ok("Receiver joined alone (peers: 1)", rJoined.peers === 1);
 
   const sender1 = await wsOpen(SIGNAL);
-  sender1.send({ type: "join", code: code1, role: "sender", token: token1 });
+  ok("Receiver got its own peer id", typeof rJoined.peer === "string" && rJoined.peer.length >= 6);
+  sender1.send({ type: "join", code: code1, role: "sender", token: token1, peer: rJoined.peer });
   const sJoined = await sender1.recv((m) => m.type === "joined");
   ok("Sender joined second and sees peers: 2", sJoined.peers === 2);
 
@@ -111,17 +112,24 @@ function wsOpen(url, onBinary) {
   const code2 = data2.room.code;
   const token2 = data2.sender_token;
 
-  const sender2A = await wsOpen(SIGNAL);
-  sender2A.send({ type: "join", code: code2, role: "sender", token: token2 });
-  await sender2A.recv((m) => m.type === "joined");
+  const lobby2 = await wsOpen(SIGNAL);
+  lobby2.send({ type: "join", code: code2, role: "sender", token: token2 });
+  const lJoined = await lobby2.recv((m) => m.type === "joined");
+  ok("Sender without peer becomes the room lobby", lJoined.role === "lobby");
 
   const receiver2 = await wsOpen(SIGNAL);
   receiver2.send({ type: "join", code: code2, role: "receiver" });
-  await receiver2.recv((m) => m.type === "joined");
-  await sender2A.recv((m) => m.type === "peer-joined");
+  const r2Joined = await receiver2.recv((m) => m.type === "joined");
+  const lSaw = await lobby2.recv((m) => m.type === "receiver-joined");
+  ok("Lobby is told about the receiver", lSaw.peer === r2Joined.peer);
+
+  const sender2A = await wsOpen(SIGNAL);
+  sender2A.send({ type: "join", code: code2, role: "sender", token: token2, peer: r2Joined.peer });
+  await sender2A.recv((m) => m.type === "joined");
+  await receiver2.recv((m) => m.type === "peer-joined");
 
   const sender2B = await wsOpen(SIGNAL);
-  sender2B.send({ type: "join", code: code2, role: "sender", token: token2 });
+  sender2B.send({ type: "join", code: code2, role: "sender", token: token2, peer: r2Joined.peer });
   const sRejoined = await sender2B.recv((m) => m.type === "joined");
   ok("Sender re-joined into its slot", sRejoined.role === "sender");
 
@@ -136,6 +144,7 @@ function wsOpen(url, onBinary) {
 
   receiver2.close();
   sender2B.close();
+  lobby2.close();
 
   console.log("\n── Test 3: Line closure on room DELETE ──");
   const r3 = await fetch(`${HTTP}/api/v1/box/rooms`, {
@@ -196,10 +205,10 @@ function wsOpen(url, onBinary) {
     }
   });
   receiver4.send({ type: "join", code: code4, role: "receiver" });
-  await receiver4.recv((m) => m.type === "joined");
+  const r4Joined = await receiver4.recv((m) => m.type === "joined");
 
   sender4 = await wsOpen(SIGNAL);
-  sender4.send({ type: "join", code: code4, role: "sender", token: token4 });
+  sender4.send({ type: "join", code: code4, role: "sender", token: token4, peer: r4Joined.peer });
   await sender4.recv((m) => m.type === "joined");
   await sender4.recv((m) => m.type === "peer-ready");
   await receiver4.recv((m) => m.type === "peer-joined");
@@ -362,25 +371,25 @@ function wsOpen(url, onBinary) {
 
   const recvPrimary = await wsOpen(SIGNAL, onLaneBinary);
   recvPrimary.send({ type: "join", code: code7, role: "receiver" });
-  await recvPrimary.recv((m) => m.type === "joined");
+  const peer7 = (await recvPrimary.recv((m) => m.type === "joined")).peer;
 
   const recvLanes = [];
   for (let i = 0; i < 6; i++) {
     const rl = await wsOpen(SIGNAL, onLaneBinary);
-    rl.send({ type: "join-lane", code: code7, role: "receiver", lane: i + 1 });
+    rl.send({ type: "join-lane", code: code7, role: "receiver", peer: peer7, lane: i + 1 });
     await rl.recv((m) => m.type === "lane-joined");
     recvLanes.push(rl);
   }
 
   const sendPrimary = await wsOpen(SIGNAL);
-  sendPrimary.send({ type: "join", code: code7, role: "sender", token: token7 });
+  sendPrimary.send({ type: "join", code: code7, role: "sender", token: token7, peer: peer7 });
   await sendPrimary.recv((m) => m.type === "joined");
   await sendPrimary.recv((m) => m.type === "peer-ready");
 
   const sendLanes = [];
   for (let i = 0; i < 6; i++) {
     const sl = await wsOpen(SIGNAL);
-    sl.send({ type: "join-lane", code: code7, role: "sender", token: token7, lane: i + 1 });
+    sl.send({ type: "join-lane", code: code7, role: "sender", token: token7, peer: peer7, lane: i + 1 });
     await sl.recv((m) => m.type === "lane-joined");
     sendLanes.push(sl);
   }
@@ -463,6 +472,46 @@ function wsOpen(url, onBinary) {
   ok("Foreign Origin gets no CORS header", evilCors.headers.get("access-control-allow-origin") === null);
   const qsPw = await fetch(`${HTTP}/signal/stream/${code5}/0?password=x`, { method: "POST" });
   ok("Stream sender token in query string is ignored (401)", qsPw.status === 401 || qsPw.status === 404);
+
+  console.log("\n── Test 9: One link, several receivers ──");
+  const r9 = await fetch(`${HTTP}/api/v1/box/rooms`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ files: [{ name: "pic.jpg", size: 4 }] }),
+  });
+  const d9 = await r9.json();
+  const lobby9 = await wsOpen(SIGNAL);
+  lobby9.send({ type: "join", code: d9.room.code, role: "sender", token: d9.sender_token });
+  await lobby9.recv((m) => m.type === "joined");
+  const got9 = [[], [], []];
+  const recv9 = [];
+  for (let k = 0; k < 3; k++) {
+    const rx = await wsOpen(SIGNAL, (buf) => got9[k].push(buf.toString()));
+    rx.send({ type: "join", code: d9.room.code, role: "receiver" });
+    const j = await rx.recv((m) => m.type === "joined");
+    recv9.push({ rx, peer: j.peer });
+  }
+  const seen9 = [];
+  for (let k = 0; k < 3; k++) seen9.push((await lobby9.recv((m) => m.type === "receiver-joined")).peer);
+  ok("Lobby saw 3 distinct receivers", new Set(seen9).size === 3 && recv9.every((r) => seen9.includes(r.peer)));
+  const tx9 = [];
+  for (let k = 0; k < 3; k++) {
+    const tx = await wsOpen(SIGNAL);
+    tx.send({ type: "join", code: d9.room.code, role: "sender", token: d9.sender_token, peer: recv9[k].peer });
+    await tx.recv((m) => m.type === "joined");
+    tx.sendBinary(Buffer.from(`to-${k}`));
+    tx9.push(tx);
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  ok("Each receiver got only its own bytes", got9.every((g, k) => g.length === 1 && g[0] === `to-${k}`));
+  recv9[1].rx.close();
+  const left9 = await lobby9.recv((m) => m.type === "receiver-left");
+  ok("Lobby is told when a receiver leaves", left9.peer === recv9[1].peer);
+  const lane9 = await wsOpen(SIGNAL);
+  lane9.send({ type: "join-lane", code: d9.room.code, role: "sender", token: d9.sender_token, peer: "zzzzzzzzzzzz", lane: 1 });
+  const bad9 = await lane9.recv((m) => m.type === "error");
+  ok("Sender cannot attach to a receiver that does not exist", bad9.reason === "no-peer");
+  for (const s of [...tx9, lobby9, lane9, recv9[0].rx, recv9[2].rx]) s.close();
 
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);

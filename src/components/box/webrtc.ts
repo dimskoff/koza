@@ -267,9 +267,13 @@ export class BoxSender {
     return this.mode;
   }
 
-  async connect(code: string, token: string): Promise<void> {
+  private peer = "";
+
+  /** one sender session per receiver: `peer` is the receiver id from the lobby */
+  async connect(code: string, token: string, peer: string): Promise<void> {
     this.code = code;
     this.token = token;
+    this.peer = peer;
     void fetchIceServers();
     const url = signalUrl();
 
@@ -283,7 +287,13 @@ export class BoxSender {
     );
     this.ws.onopen = () => {
       this.ws?.send(
-        JSON.stringify({ type: "join", code: this.code, role: "sender", token: this.token }),
+        JSON.stringify({
+          type: "join",
+          code: this.code,
+          role: "sender",
+          token: this.token,
+          peer: this.peer,
+        }),
       );
       this.openTurboLanes(url);
     };
@@ -307,6 +317,7 @@ export class BoxSender {
               code: this.code,
               role: "sender",
               token: this.token,
+              peer: this.peer,
               lane: i + 1,
             }),
           );
@@ -794,6 +805,61 @@ export class BoxSender {
   }
 }
 
+/* ── sender lobby ──────────────────────────────────────────────────────
+   One per open room. The server tells it about every receiver that joins;
+   the UI then starts a dedicated BoxSender session for that receiver, so
+   several friends can download from the same link at once. */
+
+export interface LobbyEvents {
+  onReady(): void;
+  onReceiverJoined(peer: string): void;
+  onReceiverLeft(peer: string): void;
+  onError(reason: string): void;
+}
+
+export class BoxLobby {
+  private ws: WebSocket | null = null;
+  private disposed = false;
+
+  constructor(private ev: LobbyEvents) {}
+
+  connect(code: string, token: string): void {
+    this.ws = openSignal(
+      signalUrl(),
+      (msg) => {
+        if (this.disposed) return;
+        if (msg.type === "error") this.ev.onError(String(msg.reason ?? "signal error"));
+        else if (msg.type === "joined") {
+          this.ev.onReady();
+          const waiting = Array.isArray(msg.receivers) ? (msg.receivers as unknown[]) : [];
+          for (const p of waiting) if (typeof p === "string") this.ev.onReceiverJoined(p);
+        } else if (msg.type === "receiver-joined" && typeof msg.peer === "string") {
+          this.ev.onReceiverJoined(msg.peer);
+        } else if (msg.type === "receiver-left" && typeof msg.peer === "string") {
+          this.ev.onReceiverLeft(msg.peer);
+        } else if (msg.type === "bye") {
+          this.ev.onError("the room was closed");
+        }
+      },
+      () => {},
+      () => {
+        if (!this.disposed) this.ev.onError("signal line dropped");
+      },
+    );
+    this.ws.onopen = () => {
+      this.ws?.send(JSON.stringify({ type: "join", code, role: "sender", token }));
+    };
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    try {
+      this.ws?.close();
+    } catch {}
+    this.ws = null;
+  }
+}
+
 /* ── receiver ──────────────────────────────────────────────────────── */
 
 export interface IncomingFile {
@@ -845,6 +911,7 @@ export class BoxReceiver {
   private lastAckAt = 0;
   private candidateQueue: RTCIceCandidateInit[] = [];
   private mode: TransportMode = "connecting";
+  private peer = "";
   private watchdog: ReturnType<typeof setInterval> | null = null;
 
   constructor(private ev: ReceiverEvents) {}
@@ -876,7 +943,6 @@ export class BoxReceiver {
           password: this.password,
         }),
       );
-      this.openTurboLanes(url);
     };
     this.watchdog = setInterval(() => this.tick(), 300);
   }
@@ -899,6 +965,7 @@ export class BoxReceiver {
               code: this.code,
               role: "receiver",
               password: this.password,
+              peer: this.peer,
               lane: i + 1,
             }),
           );
@@ -961,6 +1028,11 @@ export class BoxReceiver {
     }
 
     if (type === "joined") {
+      /* lanes attach to OUR sub-line, so they need the id the server gave us */
+      if (typeof msg.peer === "string" && !this.peer) {
+        this.peer = msg.peer;
+        this.openTurboLanes(signalUrl());
+      }
       this.ev.onJoined();
       return;
     }

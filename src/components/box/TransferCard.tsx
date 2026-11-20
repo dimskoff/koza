@@ -19,39 +19,23 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { KozaQr } from "../koza/QrCode";
-import {
-  ConnectingDots,
-  FileGlyph,
-  FingerprintHover,
-  PeerAvatar,
-  PeerSpin,
-  ScanSweep,
-  TransferPanel,
-} from "./visuals";
-import { BoxSender, computeTransferFingerprint, type TransportMode } from "./webrtc";
-import { TransportBadge } from "./TransportBadge";
-import {
-  type BoxFile,
-  fmtDuration,
-  fmtSpeed,
-  prettySize,
-  shortLinkOf,
-  SpeedMeter,
-} from "./lib";
+import { FileGlyph, FingerprintHover, PeerSpin, ScanSweep } from "./visuals";
+import { BoxLobby, BoxSender, computeTransferFingerprint } from "./webrtc";
+import { ReceiversList, type ReceiverRow } from "./ReceiversList";
+import { type BoxFile, fmtDuration, prettySize, shortLinkOf, SpeedMeter } from "./lib";
 
-type Stage = "collect" | "waiting" | "handshake" | "moving" | "done" | "error";
-
-const SCAN_LINES = [
-  "waiting on the signaling line",
-  "your invite link is live — send it",
-  "the line opens the moment they join",
-  "punching a direct path · stun + turn",
-  "listening for a peer",
-];
+/* collect → live (room open, any number of friends download) → back to collect */
+type Stage = "collect" | "live" | "error";
 
 interface StagedItem {
   meta: BoxFile;
   file: File;
+}
+
+interface Session {
+  row: ReceiverRow;
+  engine: BoxSender | null;
+  meter: SpeedMeter;
 }
 
 export function TransferCard() {
@@ -63,75 +47,64 @@ export function TransferCard() {
   const [password, setPassword] = useState("");
   const [qrOpen, setQrOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [moved, setMoved] = useState<Record<string, number>>({});
-  const [doneCount, setDoneCount] = useState(0);
-  const doneCountRef = useRef(0);
-  const [speed, setSpeed] = useState(0);
-  const [eta, setEta] = useState(0);
-  const [summary, setSummary] = useState<{
-    files: number;
-    totalBytes: number;
-    durationMs: number;
-    avgBps: number;
-    encrypted: boolean;
-  } | null>(null);
-  const [scanIdx, setScanIdx] = useState(0);
+  const [rows, setRows] = useState<ReceiverRow[]>([]);
   const [linkCopied, setLinkCopied] = useState(false);
   const [errorReason, setErrorReason] = useState("");
-  const [transport, setTransport] = useState<TransportMode | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const engineRef = useRef<BoxSender | null>(null);
+  const lobbyRef = useRef<BoxLobby | null>(null);
+  const sessionsRef = useRef(new Map<string, Session>());
+  const joinCounter = useRef(0);
   const stagedRef = useRef<StagedItem[]>([]);
   const codeRef = useRef("");
   const tokenRef = useRef("");
-  const meterRef = useRef<SpeedMeter | null>(null);
   const t0Ref = useRef(0);
-  const transferStartRef = useRef(0);
   const tick = useRef<number | null>(null);
-  const movedRef = useRef<Record<string, number>>({});
   const linkCopiedTimer = useRef<number | null>(null);
-  const stageRef = useRef<Stage>("collect");
-  const lastUiUpdateRef = useRef(0);
 
   const files = staged.map((s) => s.meta);
+  const totalBytes = files.reduce((a, f) => a + f.size, 0);
 
   useEffect(() => {
     stagedRef.current = staged;
   }, [staged]);
 
-  useEffect(() => {
-    stageRef.current = stage;
-  }, [stage]);
+  const publishRows = useCallback(() => {
+    setRows([...sessionsRef.current.values()].map((s) => ({ ...s.row })));
+  }, []);
+
+  const disposeAll = useCallback(() => {
+    lobbyRef.current?.dispose();
+    lobbyRef.current = null;
+    for (const s of sessionsRef.current.values()) s.engine?.dispose();
+    sessionsRef.current.clear();
+    if (tick.current !== null) {
+      window.clearInterval(tick.current);
+      tick.current = null;
+    }
+  }, []);
 
   useEffect(
     () => () => {
       if (linkCopiedTimer.current !== null) window.clearTimeout(linkCopiedTimer.current);
-      if (tick.current !== null) window.clearInterval(tick.current);
-      engineRef.current?.dispose();
+      disposeAll();
     },
-    [],
+    [disposeAll],
   );
 
-  const inRoom = stage === "waiting" || stage === "handshake" || stage === "moving";
+  const live = stage === "live";
+  const anyActive = rows.some((r) => r.status === "connecting" || r.status === "sending");
 
-  /* native guard — the browser asks before closing the tab mid-transfer */
+  /* the browser asks before closing the tab while the line is open */
   useEffect(() => {
-    if (!inRoom) return;
+    if (!live) return;
     const guard = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [inRoom]);
-
-  /* rotating captions while searching */
-  useEffect(() => {
-    if (stage !== "waiting") return;
-    const id = window.setInterval(() => setScanIdx((i) => i + 1), 1700);
-    return () => window.clearInterval(id);
-  }, [stage]);
+  }, [live]);
 
   const addFiles = (list: FileList | null) => {
     if (!list) return;
@@ -175,12 +148,74 @@ export function TransferCard() {
     }
   }, []);
 
-  const stopClock = () => {
-    if (tick.current !== null) {
-      window.clearInterval(tick.current);
-      tick.current = null;
-    }
-  };
+  /* a friend opened the link: give them their own sender session */
+  const startSession = useCallback(
+    (peer: string) => {
+      const sessions = sessionsRef.current;
+      const existing = sessions.get(peer);
+      if (existing && existing.row.status !== "left" && existing.row.status !== "failed") return;
+      existing?.engine?.dispose();
+
+      joinCounter.current += 1;
+      const s: Session = {
+        row: {
+          peer,
+          n: existing?.row.n ?? joinCounter.current,
+          status: "connecting",
+          moved: 0,
+          bps: 0,
+          transport: null,
+        },
+        engine: null,
+        meter: new SpeedMeter(),
+      };
+      sessions.set(peer, s);
+
+      const set = (patch: Partial<ReceiverRow>) => {
+        if (sessions.get(peer) !== s) return;
+        Object.assign(s.row, patch);
+        publishRows();
+      };
+
+      const engine = new BoxSender({
+        onJoined: () => {},
+        onPeerJoined: () => {},
+        onPeerLeft: () => {
+          if (s.row.status !== "done") set({ status: "left" });
+          s.engine?.dispose();
+          s.engine = null;
+        },
+        onTransportChange: (mode) => set({ transport: mode }),
+        onChannelOpen: (mode) => {
+          set({ status: "sending", transport: mode });
+          engine.sendFiles(stagedRef.current.map((x) => x.file)).catch((err) => {
+            if (s.row.status !== "done") set({ status: "failed", error: String(err?.message ?? err) });
+          });
+        },
+        onProgress: (bytes) => {
+          s.row.moved = bytes;
+          s.meter.push(bytes);
+        },
+        onFileQueued: () => {},
+        onFileDone: () => {},
+        onAllDone: () => {
+          set({ status: "done", moved: stagedRef.current.reduce((a, x) => a + x.meta.size, 0), bps: 0 });
+          toast.success(`Delivered to friend ${s.row.n}`);
+          window.setTimeout(() => {
+            s.engine?.dispose();
+            s.engine = null;
+          }, 800);
+        },
+        onError: (reason) => {
+          if (s.row.status !== "done") set({ status: "failed", error: reason });
+        },
+      });
+      s.engine = engine;
+      publishRows();
+      void engine.connect(codeRef.current, tokenRef.current, peer);
+    },
+    [publishRows],
+  );
 
   const startTransfer = async () => {
     const currentStaged = stagedRef.current;
@@ -191,7 +226,6 @@ export function TransferCard() {
       return;
     }
 
-    setStage("collect");
     setErrorReason("");
     let created: {
       room?: { code?: string; fingerprint?: string };
@@ -220,176 +254,84 @@ export function TransferCard() {
 
     const c = created.room.code;
     const token = created.sender_token;
-    const fp =
-      created.room.fingerprint ||
-      computeTransferFingerprint(
-        c,
-        currentStaged.map((s) => ({ name: s.meta.name, size: s.meta.size })),
-      );
     codeRef.current = c;
     tokenRef.current = token;
     setCode(c);
-    setFingerprint(fp);
-    movedRef.current = {};
-    setMoved({});
-    doneCountRef.current = 0;
-    setDoneCount(0);
-    setSpeed(0);
-    setEta(0);
-    setSummary(null);
+    setFingerprint(
+      created.room.fingerprint ||
+        computeTransferFingerprint(
+          c,
+          currentStaged.map((s) => ({ name: s.meta.name, size: s.meta.size })),
+        ),
+    );
+    disposeAll();
+    joinCounter.current = 0;
+    setRows([]);
     setElapsed(0);
-    setScanIdx(0);
-    setStage("waiting");
+    setStage("live");
 
     t0Ref.current = Date.now();
-    transferStartRef.current = Date.now();
-    lastUiUpdateRef.current = 0;
-    stopClock();
     tick.current = window.setInterval(() => {
       setElapsed(Date.now() - t0Ref.current);
-      setMoved({ ...movedRef.current });
-      const meter = meterRef.current;
-      if (meter) {
-        setSpeed(meter.bps);
-        const total = stagedRef.current.reduce((a, s) => a + s.meta.size, 0);
-        const movedBytes = Object.values(movedRef.current).reduce((a, b) => a + b, 0);
-        setEta(meter.bps > 0 ? ((total - movedBytes) / meter.bps) * 1000 : 0);
+      for (const s of sessionsRef.current.values()) {
+        s.row.bps = s.row.status === "sending" ? s.meter.bps : 0;
       }
+      publishRows();
     }, 250);
 
-    const finish = () => {
-      if (stageRef.current === "done") return;
-      stopClock();
-      const activeList = stagedRef.current;
-      const total = activeList.reduce((a, s) => a + s.meta.size, 0);
-      const durationMs = Math.max(400, Date.now() - transferStartRef.current);
-      setSummary({
-        files: activeList.length,
-        totalBytes: total,
-        durationMs,
-        avgBps: total / (durationMs / 1000),
-        encrypted: pw.length > 0,
-      });
-      setStage("done");
-      engineRef.current?.dispose();
-      engineRef.current = null;
-      closeRoom(c, token);
-      toast.success("Delivered", { description: "All files reached your peer." });
-    };
-
-    const engine = new BoxSender({
-      onJoined: () => setStage((s) => (s === "waiting" ? "waiting" : s)),
-      onPeerJoined: () => setStage((s) => (s !== "done" ? "handshake" : s)),
-      onPeerLeft: () => {
-        const st = stageRef.current;
-        if (st === "moving" || st === "handshake") {
-          const count = stagedRef.current.length;
-          if (doneCountRef.current >= count && count > 0) {
-            finish();
-            return;
-          }
-          stopClock();
-          setErrorReason("the peer dropped — the line closed");
-          setStage("error");
+    const lobby = new BoxLobby({
+      onReady: () => {},
+      onReceiverJoined: (peer) => startSession(peer),
+      onReceiverLeft: (peer) => {
+        const s = sessionsRef.current.get(peer);
+        if (!s) return;
+        /* never got going → just drop the row */
+        if (s.row.status === "connecting") {
+          s.engine?.dispose();
+          sessionsRef.current.delete(peer);
+          publishRows();
         }
       },
-      onTransportChange: (mode) => setTransport(mode),
-      onChannelOpen: (mode) => {
-        setTransport(mode);
-        transferStartRef.current = Date.now();
-        meterRef.current = new SpeedMeter();
-        setStage("moving");
-        const sender = engineRef.current;
-        if (!sender) return;
-        const rawFiles = stagedRef.current.map((s) => s.file);
-        sender.sendFiles(rawFiles).catch((err) => {
-          stopClock();
-          setErrorReason(String(err?.message ?? err));
-          setStage("error");
-        });
-      },
-      onProgress: (queued) => {
-        let remaining = queued;
-        const next: Record<string, number> = {};
-        for (const s of stagedRef.current) {
-          const take = Math.max(0, Math.min(s.meta.size, remaining));
-          next[s.meta.id] = take;
-          remaining -= take;
-        }
-        movedRef.current = next;
-        meterRef.current?.push(queued);
-        const now = Date.now();
-        if (now - lastUiUpdateRef.current >= 100) {
-          lastUiUpdateRef.current = now;
-          setMoved({ ...next });
-        }
-      },
-      onFileQueued: () => {},
-      onFileDone: () => {
-        doneCountRef.current += 1;
-        setDoneCount(doneCountRef.current);
-        setMoved({ ...movedRef.current });
-      },
-      onAllDone: () => finish(),
       onError: (reason) => {
-        if (stageRef.current === "done") return;
-        stopClock();
+        disposeAll();
         setErrorReason(reason);
         setStage("error");
       },
     });
+    lobbyRef.current = lobby;
+    lobby.connect(c, token);
+  };
 
-    engineRef.current = engine;
-    try {
-      await engine.connect(c, token);
-    } catch {
-      setErrorReason("could not reach the signaling line");
-      setStage("error");
-    }
+  /* close the line for everyone and go back to the staged files */
+  const closeLine = () => {
+    const delivered = [...sessionsRef.current.values()].filter((s) => s.row.status === "done").length;
+    disposeAll();
+    closeRoom(codeRef.current, tokenRef.current);
+    codeRef.current = "";
+    tokenRef.current = "";
+    setRows([]);
+    setStage("collect");
+    toast(
+      delivered > 0
+        ? `Line closed · delivered to ${delivered} friend${delivered > 1 ? "s" : ""}`
+        : "Line closed",
+    );
   };
 
   const resetAll = () => {
-    engineRef.current?.dispose();
-    engineRef.current = null;
+    disposeAll();
     closeRoom(codeRef.current, tokenRef.current);
     codeRef.current = "";
     tokenRef.current = "";
-    stopClock();
-    meterRef.current = null;
     setStaged([]);
     stagedRef.current = [];
+    setRows([]);
     setStage("collect");
     setCode("");
     setFingerprint("");
-    setSummary(null);
-    movedRef.current = {};
-    setMoved({});
-    doneCountRef.current = 0;
-    setDoneCount(0);
     setElapsed(0);
-    setSpeed(0);
-    setEta(0);
     setPassword("");
     setErrorReason("");
-  };
-
-  const cancelTransfer = () => {
-    engineRef.current?.dispose();
-    engineRef.current = null;
-    closeRoom(codeRef.current, tokenRef.current);
-    codeRef.current = "";
-    tokenRef.current = "";
-    stopClock();
-    meterRef.current = null;
-    setStage("collect");
-    movedRef.current = {};
-    setMoved({});
-    doneCountRef.current = 0;
-    setDoneCount(0);
-    setElapsed(0);
-    setSpeed(0);
-    setEta(0);
-    toast("Transfer cancelled — the room is closed");
   };
 
   const copy = async (text: string, label: string) => {
@@ -414,28 +356,22 @@ export function TransferCard() {
   };
 
   const invite = shortLinkOf(code);
-  const totalBytes = files.reduce((a, f) => a + f.size, 0);
-  const totalMoved = files.reduce((a, f) => a + (moved[f.id] ?? 0), 0);
-  const overall = totalBytes > 0 ? Math.min(100, (totalMoved / totalBytes) * 100) : 0;
-  const etaMs = speed > 0 ? ((totalBytes - totalMoved) / speed) * 1000 : 0;
+  const deliveredCount = rows.filter((r) => r.status === "done").length;
+  const activeCount = rows.filter((r) => r.status === "sending" || r.status === "connecting").length;
 
   return (
     <div className="kz-edge w-full max-w-xl" id="transfer">
-      {/* stage strip — plain mono text, no noisy badges */}
+      {/* stage strip */}
       <div className="flex items-center justify-between border-b border-[var(--kz-hairline)] px-5 py-3">
         <span className="kz-mono text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
           {stage === "collect" && "01 · stage files"}
-          {stage === "waiting" && "02 · waiting for peer"}
-          {stage === "handshake" && "02 · connecting"}
-          {stage === "moving" && "03 · sending"}
-          {stage === "done" && "04 · delivered"}
+          {live && (anyActive ? "03 · sending" : "02 · line open")}
           {stage === "error" && "line trouble"}
         </span>
 
         <span className="flex items-center gap-3">
-          {(stage === "moving" || stage === "done") && <TransportBadge mode={transport} />}
-          {inRoom && fingerprint && <FingerprintHover fingerprint={fingerprint} />}
-          {inRoom && (
+          {live && fingerprint && <FingerprintHover fingerprint={fingerprint} />}
+          {live && (
             <span className="kz-mono flex items-center gap-1.5 text-[11px] text-[var(--kz-smoke)]">
               <Timer className="h-3.5 w-3.5" />
               {fmtDuration(elapsed)}
@@ -583,62 +519,47 @@ export function TransferCard() {
         </div>
       )}
 
-      {/* ── ROOM (waiting / handshake / moving) ─────────────────── */}
-      {inRoom && (
+      {/* ── LINE OPEN: link + every friend who joined ───────────── */}
+      {live && (
         <div className="p-5 sm:p-6">
-          {/* Invite link bar — sleek inline bar matching the shortener */}
-          <AnimatePresence initial={false}>
-            {(stage === "waiting" || stage === "handshake") && (
-              <motion.div
-                key="invite"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.26, ease: [0.32, 0.72, 0, 1] }}
-                className="overflow-hidden"
+          <div className="kz-inset flex items-center justify-between gap-2 p-2 pl-3.5">
+            <button
+              onClick={copyInvite}
+              className="kz-mono min-w-0 flex-1 cursor-pointer truncate text-left text-[15px] font-medium tracking-tight"
+              title="Click to copy link"
+            >
+              <span className="text-[var(--kz-ash)]">{getSite().boxHost}/r/</span>
+              <span className="text-[var(--kz-coral)]">{code}</span>
+            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => setQrOpen(true)}
+                className="kz-ghost-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-[var(--kz-ash)] hover:bg-white/[0.06] hover:text-[var(--kz-mist)]"
+                aria-label="Show QR code"
+                title="QR code"
               >
-                <div className="kz-inset flex items-center justify-between gap-2 p-2 pl-3.5">
-                  <button
-                    onClick={copyInvite}
-                    className="kz-mono min-w-0 flex-1 cursor-pointer truncate text-left text-[15px] font-medium tracking-tight"
-                    title="Click to copy link"
-                  >
-                    <span className="text-[var(--kz-ash)]">{getSite().boxHost}/r/</span>
-                    <span className="text-[var(--kz-coral)]">{code}</span>
-                  </button>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      onClick={() => setQrOpen(true)}
-                      className="kz-ghost-btn flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-[var(--kz-ash)] hover:bg-white/[0.06] hover:text-[var(--kz-mist)]"
-                      aria-label="Show QR code"
-                      title="QR code"
-                    >
-                      <QrCode className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={copyInvite}
-                      className="kz-cta flex h-9 cursor-pointer items-center gap-1.5 rounded-[9px] px-3.5 text-[12.5px]"
-                    >
-                      {linkCopied ? (
-                        <>
-                          <Check className="h-3.5 w-3.5" strokeWidth={2.5} /> Copied
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5" /> Copy
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                <QrCode className="h-4 w-4" />
+              </button>
+              <button
+                onClick={copyInvite}
+                className="kz-cta flex h-9 cursor-pointer items-center gap-1.5 rounded-[9px] px-3.5 text-[12.5px]"
+              >
+                {linkCopied ? (
+                  <>
+                    <Check className="h-3.5 w-3.5" strokeWidth={2.5} /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
 
-          {/* Status area */}
           <div className="mt-4">
             <AnimatePresence mode="wait" initial={false}>
-              {stage === "waiting" && (
+              {rows.length === 0 ? (
                 <motion.div
                   key="scan"
                   initial={{ opacity: 0, y: 6 }}
@@ -650,79 +571,41 @@ export function TransferCard() {
                   <div className="flex items-center gap-2.5">
                     <PeerSpin />
                     <p className="text-[14px] font-medium text-[var(--kz-mist)]">
-                      Waiting for a peer
+                      Waiting for friends
                     </p>
                   </div>
                   <p className="kz-mono mt-1.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    share the link above · don&apos;t close this tab
+                    share the link · anyone with it can download · keep this tab open
                   </p>
                   <div className="mt-3.5">
                     <ScanSweep />
                   </div>
                 </motion.div>
-              )}
-
-              {stage === "handshake" && (
+              ) : (
                 <motion.div
-                  key="handshake"
-                  initial={{ opacity: 0, y: 8 }}
+                  key="list"
+                  initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.26 }}
-                  className="kz-inset flex items-center gap-4 px-5 py-5"
+                  transition={{ duration: 0.24 }}
                 >
-                  <PeerAvatar name="peer" />
-                  <div className="min-w-0 flex-1 text-left">
-                    <p className="text-[14px] font-medium text-[var(--kz-mist)]">
-                      <span className="text-[var(--kz-coral)]">Peer</span> connected
-                      <ConnectingDots />
-                    </p>
-                    <p className="kz-mono mt-1 text-[11px] text-[var(--kz-smoke)]">
-                      exchanging keys · opening direct channel
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-
-              {stage === "moving" && (
-                <motion.div
-                  key="flow"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.26 }}
-                  className="w-full text-left"
-                >
-                  <TransferPanel
-                    pct={overall}
-                    moved={totalMoved}
-                    total={totalBytes}
-                    bps={speed}
-                    etaMs={etaMs}
-                    files={files.map((f) => ({
-                      name: f.name,
-                      size: f.size,
-                      done: moved[f.id] ?? 0,
-                    }))}
-                    doneLabel="sent"
-                    caption={`${files.length} file${files.length > 1 ? "s" : ""} · ${doneCount} done`}
-                  />
+                  <ReceiversList rows={rows} total={totalBytes} />
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
 
-          {/* Clean bottom bar: staged payload info + compact Cancel */}
           <div className="mt-4 flex items-center justify-between gap-2 border-t border-[var(--kz-hairline)] pt-3">
             <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">
               {files.length} file{files.length > 1 ? "s" : ""} · {prettySize(totalBytes)}
+              {rows.length > 0 &&
+                ` · ${deliveredCount} delivered${activeCount ? ` · ${activeCount} active` : ""}`}
             </span>
             <button
-              onClick={cancelTransfer}
+              onClick={closeLine}
               className="kz-mono flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11.5px] text-[var(--kz-ash)] transition-colors hover:bg-white/[0.05] hover:text-[var(--kz-coral)]"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Cancel
+              <X className="h-3.5 w-3.5" />
+              Close line
             </button>
           </div>
         </div>
@@ -738,7 +621,7 @@ export function TransferCard() {
             <div className="min-w-0">
               <p className="text-[15px] font-medium text-[var(--kz-mist)]">The line dropped</p>
               <p className="kz-mono mt-1 break-words text-[11px] text-[var(--kz-smoke)]">
-                {errorReason || "something went wrong mid-flight"}
+                {errorReason || "something went wrong"}
               </p>
               <p className="kz-mono mt-2 text-[11px] text-[var(--kz-smoke)]">
                 nothing was stored anywhere — the bytes died with the line
@@ -760,40 +643,6 @@ export function TransferCard() {
               <RotateCcw className="h-4 w-4" /> Try again
             </button>
           </div>
-        </div>
-      )}
-
-      {/* ── DONE ────────────────────────────────────────────────── */}
-      {stage === "done" && summary && (
-        <div className="p-5 sm:p-6">
-          <div className="kz-inset flex items-center gap-4 px-5 py-5">
-            <motion.div
-              initial={{ scale: 0.3, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 380, damping: 18 }}
-              className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[var(--kz-coral)]"
-              aria-hidden="true"
-            >
-              <Check className="h-6 w-6 text-[#1a0b0b]" strokeWidth={3} />
-            </motion.div>
-            <div>
-              <p className="text-lg font-medium text-[var(--kz-mist)]">Delivered</p>
-              <p className="kz-mono mt-1 text-[11px] uppercase tracking-wider text-[var(--kz-smoke)]">
-                {summary.files} file{summary.files > 1 ? "s" : ""} ·{" "}
-                {prettySize(summary.totalBytes)} · {fmtDuration(summary.durationMs)} ·{" "}
-                <span className="normal-case text-[var(--kz-ash)]">
-                  avg {fmtSpeed(summary.avgBps)}
-                </span>
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={resetAll}
-            className="kz-neutral-btn mt-4 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
-          >
-            <Plus className="h-4 w-4" /> New transfer
-          </button>
         </div>
       )}
 

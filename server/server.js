@@ -536,7 +536,30 @@ function authorized(req) {
 }
 
 /* ── active signaling lines & direct HTTP stream pipes ──────────────── */
-const lines = new Map(); // code → { sender, receiver, senderLanes, receiverLanes, bytesRelayed }
+/* One room can feed several receivers. Every receiver gets its own 1:1
+ * sub-line keyed `${code}/${peer}` (sender session ⇄ that receiver), so all
+ * 1:1 logic below stays untouched. The sender's tab also holds a "lobby"
+ * socket per room that is told when receivers join or leave. */
+const lines = new Map(); // `${code}/${peer}` → { sender, receiver, senderLanes, receiverLanes, bytesRelayed }
+const lobbies = new Map(); // code → sender lobby ws
+const MAX_RECEIVERS_PER_ROOM = 8;
+const PEER_RE = /^[a-z0-9]{6,16}$/;
+const lineKey = (code, peer) => `${code}/${peer}`;
+const roomOfKey = (key) => String(key).split("/")[0];
+
+function subLinesOf(code) {
+  const out = [];
+  for (const [key, line] of lines) if (roomOfKey(key) === code) out.push([key, line]);
+  return out;
+}
+
+function receiverCount(code) {
+  return subLinesOf(code).filter(([, l]) => l.receiver && l.receiver.readyState === 1).length;
+}
+
+function newPeerId() {
+  return crypto.randomBytes(6).toString("hex");
+}
 const streamPipes = new Map(); // `${code}:${idx}` → { senderReq?, receiverRes?, timer }
 
 function sendWs(ws, obj) {
@@ -566,7 +589,22 @@ function clearWsPause(ws) {
   } catch {}
 }
 
+/* close a whole room: every receiver sub-line + the sender lobby */
 function closeLine(code, reason = "room-closed") {
+  const room = roomOfKey(code);
+  for (const [key] of subLinesOf(room)) closeSubLine(key, reason);
+  const lobby = lobbies.get(room);
+  if (lobby) {
+    lobbies.delete(room);
+    lobby.profile = null;
+    sendWs(lobby, { type: "bye", reason });
+    try {
+      lobby.close();
+    } catch {}
+  }
+}
+
+function closeSubLine(code, reason) {
   const line = lines.get(code);
   if (!line) return;
   const hadBytes = (line.bytesRelayed || 0) > 0;
@@ -611,9 +649,12 @@ function roomExpiry(r) {
 
 function publicRoom(r, req) {
   const boxOrigin = boxOriginOf(req);
-  const line = lines.get(r.code);
-  const senderOnline = Boolean(line?.sender && line.sender.readyState === 1);
-  const receiverOnline = Boolean(line?.receiver && line.receiver.readyState === 1);
+  const subs = subLinesOf(r.code).map(([, l]) => l);
+  const lobby = lobbies.get(r.code);
+  const senderOnline = Boolean(lobby && lobby.readyState === 1);
+  const receivers = receiverCount(r.code);
+  const receiverOnline = receivers > 0;
+  const line = { bytesRelayed: subs.reduce((a, l) => a + (l.bytesRelayed || 0), 0) };
   return {
     code: r.code,
     url: `${boxOrigin}/r/${r.code}`,
@@ -622,6 +663,7 @@ function publicRoom(r, req) {
     files: r.files,
     sender_online: senderOnline,
     receiver_online: receiverOnline,
+    receivers,
     bytes_relayed: line?.bytesRelayed || 0,
     created_at: new Date(r.createdAt).toISOString(),
     expires_at: new Date(roomExpiry(r)).toISOString(),
@@ -1255,7 +1297,7 @@ const wss = new WebSocketServer({
 
 async function joinLine(ws, msg) {
   /* brute-force guard for room passwords / sender tokens over the socket */
-  if (!allowRate(ws._req, "ws-join", 90, 60_000)) {
+  if (!allowRate(ws._req, "ws-join", 200, 60_000)) {
     sendWs(ws, { type: "error", reason: "rate-limited" });
     try {
       ws.close(1008, "rate-limited");
@@ -1292,7 +1334,41 @@ async function joinLine(ws, msg) {
     return sendWs(ws, { type: "error", reason: "no-room" });
   }
 
-  let line = lines.get(code);
+  /* ── sender lobby: the sender's tab, told about every receiver ── */
+  if (role === "sender" && !isLane && !msg.peer) {
+    const prev = lobbies.get(code);
+    if (prev && prev !== ws) {
+      prev.profile = null;
+      try {
+        prev.terminate();
+      } catch {}
+    }
+    lobbies.set(code, ws);
+    ws.profile = { code, role: "lobby", isLane: false };
+    /* receivers that showed up before the sender (re)connected */
+    const waiting = subLinesOf(code)
+      .filter(([, l]) => l.receiver && l.receiver.readyState === 1)
+      .map(([key]) => key.split("/")[1]);
+    sendWs(ws, { type: "joined", role: "lobby", receivers: waiting });
+    return;
+  }
+
+  /* ── which receiver sub-line does this socket belong to? ── */
+  let peer = typeof msg.peer === "string" ? msg.peer.toLowerCase() : "";
+  if (role === "receiver" && !isLane && !peer) {
+    if (receiverCount(code) >= MAX_RECEIVERS_PER_ROOM) {
+      return sendWs(ws, { type: "error", reason: "room-full" });
+    }
+    peer = newPeerId();
+  }
+  if (!PEER_RE.test(peer)) return sendWs(ws, { type: "error", reason: "bad-join" });
+  const key = lineKey(code, peer);
+  /* lanes and sender sessions may only attach to a receiver that exists */
+  if ((isLane || role === "sender") && !lines.has(key)) {
+    return sendWs(ws, { type: "error", reason: "no-peer" });
+  }
+
+  let line = lines.get(key);
   if (!line) {
     line = {
       sender: null,
@@ -1301,7 +1377,7 @@ async function joinLine(ws, msg) {
       receiverLanes: new Set(),
       bytesRelayed: 0,
     };
-    lines.set(code, line);
+    lines.set(key, line);
   }
 
   if (isLane) {
@@ -1310,7 +1386,7 @@ async function joinLine(ws, msg) {
       return sendWs(ws, { type: "error", reason: "too-many-lanes" });
     }
     laneSet.add(ws);
-    ws.profile = { code, role, isLane: true };
+    ws.profile = { code: key, role, isLane: true };
     sendWs(ws, { type: "lane-joined", role, lanes: laneSet.size });
     if (role === "receiver" && line.sender && line.sender.readyState === 1) {
       sendWs(line.sender, { type: "lane-ready", lanes: laneSet.size });
@@ -1344,11 +1420,12 @@ async function joinLine(ws, msg) {
     }
   }
   line[role] = ws;
-  ws.profile = { code, role, isLane: false };
+  ws.profile = { code: key, role, isLane: false };
 
   const other = role === "sender" ? line.receiver : line.sender;
   const isPeerOnline = Boolean(other && other.readyState === 1);
-  sendWs(ws, { type: "joined", role, peers: isPeerOnline ? 2 : 1 });
+  sendWs(ws, { type: "joined", role, peer, peers: isPeerOnline ? 2 : 1 });
+  if (role === "receiver") sendWs(lobbies.get(code), { type: "receiver-joined", peer });
   if (isPeerOnline) {
     sendWs(other, { type: "peer-joined", role });
     if (role === "sender") {
@@ -1362,8 +1439,16 @@ function leaveLine(ws) {
   const p = ws.profile;
   if (!p) return;
   ws.profile = null;
+  if (p.role === "lobby") {
+    if (lobbies.get(p.code) === ws) lobbies.delete(p.code);
+    return;
+  }
   const line = lines.get(p.code);
   if (!line) return;
+  if (!p.isLane && p.role === "receiver" && line.receiver === ws) {
+    const [room, peer] = String(p.code).split("/");
+    sendWs(lobbies.get(room), { type: "receiver-left", peer });
+  }
   if (p.isLane) {
     line.senderLanes?.delete(ws);
     line.receiverLanes?.delete(ws);
@@ -1536,7 +1621,7 @@ server.on("upgrade", (req, socket, head) => {
   /* a client resetting mid-handshake must not raise an unhandled 'error' */
   socket.on("error", () => {});
   if (!url || url.pathname.replace(/\/+$/, "") !== "/signal") return socket.destroy();
-  if (!allowRate(req, "ws-connect", 120, 60_000)) {
+  if (!allowRate(req, "ws-connect", 240, 60_000)) {
     socket.write("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n");
     return socket.destroy();
   }
