@@ -29,7 +29,7 @@ import {
 import { switchTo } from "../transition";
 import { BoxReceiver, computeTransferFingerprint, saveBlob, type TransportMode } from "./webrtc";
 import { buildZip, canZip } from "./zip";
-import { isPreviewableImage, PhotoGallery } from "./PhotoGallery";
+import { isPreviewable, isPreviewableVideo, PhotoGallery } from "./PhotoGallery";
 import { TransportBadge } from "./TransportBadge";
 import {
   fmtDuration,
@@ -164,9 +164,10 @@ export function Receiver({ code }: { code: string }) {
   const needsPw = Boolean(offer?.password);
   const doneCount = received.length;
   /* photos are previewed in the page instead of being dropped into Downloads */
-  const photos = useMemo(() => received.filter((f) => isPreviewableImage(f.name, f.type)), [received]);
-  const otherFiles = useMemo(() => received.filter((f) => !isPreviewableImage(f.name, f.type)), [received]);
-  const allPhotos = Boolean(offer?.files.length) && Boolean(offer?.files.every((f) => isPreviewableImage(f.name)));
+  const photos = useMemo(() => received.filter((f) => isPreviewable(f.name, f.type)), [received]);
+  const otherFiles = useMemo(() => received.filter((f) => !isPreviewable(f.name, f.type)), [received]);
+  const allPhotos = Boolean(offer?.files.length) && Boolean(offer?.files.every((f) => isPreviewable(f.name)));
+  const anyVideo = Boolean(offer?.files.some((f) => isPreviewableVideo(f.name)));
 
   const stopClock = () => {
     if (tick.current !== null) {
@@ -248,7 +249,7 @@ export function Receiver({ code }: { code: string }) {
           setReceived([...receivedRef.current]);
           movedRef.current = { ...movedRef.current, [index]: file.size };
           setMovedByIdx({ ...movedRef.current });
-          if (!isPreviewableImage(file.name, file.type)) saveBlob(file.blob, file.name);
+          if (!isPreviewable(file.name, file.type)) saveBlob(file.blob, file.name);
         },
         onAllDone: () => {
           stopClock();
@@ -259,8 +260,8 @@ export function Receiver({ code }: { code: string }) {
           engineRef.current = null;
           if (eng) window.setTimeout(() => eng.dispose(), 600);
           toast.success("Delivered", {
-            description: receivedRef.current.every((f) => isPreviewableImage(f.name, f.type))
-              ? "Tap a photo to view it full size."
+            description: receivedRef.current.every((f) => isPreviewable(f.name, f.type))
+              ? "Tap to open it full size."
               : "The files have been saved to your device.",
           });
         },
@@ -577,7 +578,11 @@ export function Receiver({ code }: { code: string }) {
                     >
                       <Download className="h-4 w-4" />
                       {allPhotos
-                        ? `View ${offer.files.length > 1 ? "photos" : "photo"}`
+                        ? anyVideo
+                          ? offer.files.length > 1
+                            ? "View media"
+                            : "Watch video"
+                          : `View ${offer.files.length > 1 ? "photos" : "photo"}`
                         : `Download ${offer.files.length > 1 ? "files" : "file"}`}
                       <ArrowRight className="h-4 w-4" />
                     </button>

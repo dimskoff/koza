@@ -4,8 +4,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Play, X } from "lucide-react";
 import { prettySize } from "./lib";
+import { VideoPlayer } from "./VideoPlayer";
 
 /* Image formats every modern browser can render. HEIC/RAW are left out on
    purpose: they'd show a broken tile, so they're saved like any other file. */
@@ -17,6 +18,19 @@ export function isPreviewableImage(name: string, type = ""): boolean {
   return PREVIEW_EXT.has(ext) || /^image\/(png|jpe?g|gif|webp|avif|bmp|svg\+xml)$/i.test(type);
 }
 
+/* Containers browsers play natively. Codec support still varies (e.g. HEVC
+   in .mov) — the player falls back to "download to watch" if it can't. */
+const VIDEO_EXT = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
+
+export function isPreviewableVideo(name: string, type = ""): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXT.has(ext) || /^video\/(mp4|webm|ogg|quicktime)$/i.test(type);
+}
+
+/** shown in the page (photo or video) instead of dropped into Downloads */
+export const isPreviewable = (name: string, type = "") =>
+  isPreviewableImage(name, type) || isPreviewableVideo(name, type);
+
 export interface GalleryItem {
   index: number;
   name: string;
@@ -24,7 +38,7 @@ export interface GalleryItem {
   blob: Blob;
 }
 
-/* Photos open as a preview instead of being dropped into Downloads; every
+/* Photos and videos open as a preview instead of being dropped into Downloads; every
    tile and the full-screen viewer have their own download button. */
 export function PhotoGallery({
   items,
@@ -74,12 +88,28 @@ export function PhotoGallery({
                 className="block h-full w-full cursor-zoom-in"
                 aria-label={`Open ${it.name}`}
               >
-                <img
-                  src={urls[i]}
-                  alt={it.name}
-                  className={`h-full w-full ${single ? "max-h-[420px] object-contain" : "object-cover"} transition-transform duration-300 group-hover:scale-[1.03]`}
-                  draggable={false}
-                />
+                {isPreviewableVideo(it.name, it.blob.type) ? (
+                  <>
+                    {/* first frame as the thumbnail */}
+                    <video
+                      src={`${urls[i]}#t=0.1`}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      className={`h-full w-full ${single ? "max-h-[420px] object-contain" : "object-cover"}`}
+                    />
+                    <span className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition-transform duration-200 group-hover:scale-110">
+                      <Play className="ml-0.5 h-5 w-5" fill="currentColor" />
+                    </span>
+                  </>
+                ) : (
+                  <img
+                    src={urls[i]}
+                    alt={it.name}
+                    className={`h-full w-full ${single ? "max-h-[420px] object-contain" : "object-cover"} transition-transform duration-300 group-hover:scale-[1.03]`}
+                    draggable={false}
+                  />
+                )}
               </button>
               <button
                 type="button"
@@ -142,18 +172,31 @@ export function PhotoGallery({
 
             <div className="relative flex min-h-0 flex-1 items-center justify-center px-4 pb-6">
               <AnimatePresence mode="wait" initial={false}>
-                <motion.img
-                  key={open}
-                  src={urls[open]}
-                  alt={current.name}
-                  initial={{ opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
-                  onClick={(e) => e.stopPropagation()}
-                  draggable={false}
-                />
+                {isPreviewableVideo(current.name, current.blob.type) ? (
+                  <motion.div
+                    key={open}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                    className="flex max-h-full max-w-full items-center justify-center"
+                  >
+                    <VideoPlayer src={urls[open]} autoPlay />
+                  </motion.div>
+                ) : (
+                  <motion.img
+                    key={open}
+                    src={urls[open]}
+                    alt={current.name}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                    className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+                    onClick={(e) => e.stopPropagation()}
+                    draggable={false}
+                  />
+                )}
               </AnimatePresence>
 
               {items.length > 1 && (
@@ -165,7 +208,7 @@ export function PhotoGallery({
                       setOpen((open - 1 + items.length) % items.length);
                     }}
                     className="absolute left-3 top-1/2 flex h-11 w-11 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-                    aria-label="Previous photo"
+                    aria-label="Previous"
                   >
                     <ChevronLeft className="h-5 w-5" />
                   </button>
@@ -176,7 +219,7 @@ export function PhotoGallery({
                       setOpen((open + 1) % items.length);
                     }}
                     className="absolute right-3 top-1/2 flex h-11 w-11 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-                    aria-label="Next photo"
+                    aria-label="Next"
                   >
                     <ChevronRight className="h-5 w-5" />
                   </button>
