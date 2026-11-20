@@ -15,6 +15,8 @@ const FORWARD_REQUEST_HEADERS = [
   "x-forwarded-for",
   "x-real-ip",
   "user-agent",
+  /* link rules look at the visitor's language */
+  "accept-language",
 ];
 
 const FORWARD_RESPONSE_HEADERS = [

@@ -52,6 +52,15 @@ const clean = (v, max = MAX_VALUE) =>
     .trim()
     .slice(0, max);
 
+/* messages keep their line breaks (max 3 blank lines in a row) */
+const cleanText = (v, max = MAX_TEXT) =>
+  String(v ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim()
+    .slice(0, max);
+
 const list = (v) =>
   clean(v)
     .split(/[\s,;]+/)
@@ -169,11 +178,11 @@ async function validateRules(input, { normalizeUrl, destinationError }) {
       if (pw.length < 4) throw new RuleError(`${where}: password needs at least 4 characters`);
       then.password = pw;
     } else if (action === "notice") {
-      const text = clean(t.text, MAX_TEXT);
+      const text = cleanText(t.text);
       if (!text) throw new RuleError(`${where}: write the message to show`);
       then.text = text;
     } else if (action === "block") {
-      const text = clean(t.text, MAX_TEXT);
+      const text = cleanText(t.text);
       if (text) then.text = text;
     }
     out.push({ when: conditions, then });

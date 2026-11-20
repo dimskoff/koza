@@ -2,13 +2,16 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { LinkGate } from "@/components/koza/LinkGate";
+import { LinkGate, type LinkDecision } from "@/components/koza/LinkGate";
 import { API_URL } from "@/lib/backend";
 import { getSite } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
-type Props = { params: Promise<{ slug: string }> };
+type Props = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
@@ -20,39 +23,42 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function SlugPage({ params }: Props) {
+/* the visitor's headers the link rules look at */
+const FORWARD = ["x-forwarded-for", "user-agent", "accept-language", "referer"] as const;
+
+export default async function SlugPage({ params, searchParams }: Props) {
   const { slug } = await params;
   const cleanSlug = slug.trim().toLowerCase();
-  const path = `${API_URL}/api/v1/links/${encodeURIComponent(cleanSlug)}`;
+  const sp = await searchParams;
+  const query = new URLSearchParams(
+    Object.entries(sp).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => [k, x]) : v ? [[k, v]] : [])),
+  ).toString();
 
-  let targetUrl: string | null = null;
-  let initialState: "locked" | "missing" | undefined;
+  const h = await headers();
+  const fwd: Record<string, string> = { "content-type": "application/json" };
+  for (const name of FORWARD) {
+    const v = h.get(name);
+    if (v) fwd[name] = v;
+  }
+  const referrer = h.get("referer") || "";
 
+  let initial: LinkDecision | "missing" | undefined;
   try {
-    const res = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(3500) });
-    if (res.ok) {
-      const data = (await res.json()) as { link?: { url?: string | null; password?: boolean } };
-      if (data.link?.password) initialState = "locked";
-      else if (data.link?.url) targetUrl = data.link.url;
-      else initialState = "missing";
-    } else if (res.status === 404) {
-      initialState = "missing";
-    }
-  } catch {
-    /* api momentarily busy — LinkGate probes again from the client */
-  }
-
-  if (targetUrl) {
-    /* count the click on behalf of the visitor, keeping their IP for rate limiting */
-    const h = await headers();
-    const xff = h.get("x-forwarded-for");
-    void fetch(`${path}/hit`, {
+    const res = await fetch(`${API_URL}/api/v1/links/${encodeURIComponent(cleanSlug)}/resolve`, {
       method: "POST",
+      headers: fwd,
+      body: JSON.stringify({ query, referrer }),
       cache: "no-store",
-      headers: xff ? { "x-forwarded-for": xff } : undefined,
-    }).catch(() => {});
-    redirect(targetUrl);
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) initial = "missing";
+    else if (res.ok) initial = ((await res.json()) as { decision: LinkDecision }).decision;
+  } catch {
+    /* api momentarily busy — LinkGate asks again from the browser */
   }
 
-  return <LinkGate slug={slug} initialState={initialState} />;
+  /* the common case: no gate at all → straight server-side redirect */
+  if (initial && initial !== "missing" && initial.type === "redirect") redirect(initial.url);
+
+  return <LinkGate slug={slug} initial={initial} query={query} referrer={referrer} />;
 }

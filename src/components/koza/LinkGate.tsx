@@ -4,142 +4,152 @@
 import { getSite } from "@/lib/site";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowRight,
-  Check,
-  KeyRound,
-  Loader2,
-  Lock,
-  Plus,
-  X,
-} from "lucide-react";
+import { ArrowRight, Ban, Check, Info, KeyRound, Loader2, Lock, Plus, X } from "lucide-react";
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KozaFooter, KozaNav } from "./Sections";
 import { hostOf } from "./lib";
 
-type GateState = "loading" | "missing" | "locked" | "unlocked";
+/* what the server decided for this visitor (see POST /links/{slug}/resolve) */
+export type LinkDecision =
+  | { type: "redirect"; url: string }
+  | { type: "password"; wrong?: boolean }
+  | { type: "notice"; text: string; url: string }
+  | { type: "block"; text?: string };
+
+type GateState = "loading" | "missing" | "locked" | "notice" | "blocked" | "unlocked";
+
+const accent = "bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent";
+
+const HEADLINE: Record<GateState, [string, string]> = {
+  loading: ["Opening", "link"],
+  missing: ["Link not", "found"],
+  locked: ["Protected", "link"],
+  notice: ["Before you", "go"],
+  blocked: ["Access", "restricted"],
+  unlocked: ["Redirecting", "now"],
+};
 
 export function LinkGate({
   slug,
-  initialState,
+  initial,
+  query = "",
+  referrer = "",
 }: {
   slug: string;
-  initialState?: "locked" | "missing";
+  /** decision already made on the server, or "missing"; undefined → ask from the client */
+  initial?: LinkDecision | "missing";
+  /** the visitor's ?query and Referer, so rules see the real ones */
+  query?: string;
+  referrer?: string;
 }) {
   const cleanSlug = slug.trim().toLowerCase();
-  const [state, setState] = useState<GateState>(initialState ?? "loading");
+  /* when the server already decided, render that state straight away (also
+     in the server HTML) — no loading placeholder, no flash */
+  const [state, setState] = useState<GateState>(() =>
+    initial === "missing"
+      ? "missing"
+      : initial?.type === "notice"
+        ? "notice"
+        : initial?.type === "block"
+          ? "blocked"
+          : initial?.type === "password"
+            ? "locked"
+            : "loading",
+  );
+  const [notice, setNotice] = useState<{ text: string; url: string } | null>(() =>
+    initial && initial !== "missing" && initial.type === "notice"
+      ? { text: initial.text, url: initial.url }
+      : null,
+  );
+  const [blockText, setBlockText] = useState(() =>
+    initial && initial !== "missing" && initial.type === "block" ? initial.text || "" : "",
+  );
   const [pw, setPw] = useState("");
-  const [pwWrong, setPwWrong] = useState(false);
+  const [pwWrong, setPwWrong] = useState(
+    Boolean(initial && initial !== "missing" && initial.type === "password" && initial.wrong),
+  );
   const [unlocking, setUnlocking] = useState(false);
-  const [unlockedUrl, setUnlockedUrl] = useState<string | null>(null);
+  const [targetUrl, setTargetUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  /* Fallback probe only if SSR didn't already resolve state */
+  const go = (url: string) => {
+    setTargetUrl(url);
+    setState("unlocked");
+    window.location.replace(url);
+  };
+
+  const apply = (d: LinkDecision | "missing") => {
+    if (d === "missing") return setState("missing");
+    if (d.type === "redirect") return go(d.url);
+    if (d.type === "notice") {
+      setNotice({ text: d.text, url: d.url });
+      return setState("notice");
+    }
+    if (d.type === "block") {
+      setBlockText(d.text || "");
+      return setState("blocked");
+    }
+    setState("locked");
+    if (d.wrong) {
+      setPwWrong(true);
+      inputRef.current?.focus();
+    }
+  };
+
+  const resolve = async (password?: string): Promise<LinkDecision | "missing"> => {
+    const r = await fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query, referrer, ...(password ? { password } : {}) }),
+      cache: "no-store",
+    });
+    if (r.status === 404) return "missing";
+    if (!r.ok) throw new Error(String(r.status));
+    return ((await r.json()) as { decision: LinkDecision }).decision;
+  };
+
+  /* apply the server's decision, or ask for one if SSR couldn't */
   useEffect(() => {
-    if (initialState) return;
     let alive = true;
-    fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (
-          data: {
-            link?: { url?: string | null; password?: boolean };
-          } | null,
-        ) => {
-          if (!alive) return;
-          if (!data?.link) {
-            setState("missing");
-            return;
-          }
-          if (data.link.password) {
-            setState("locked");
-            return;
-          }
-          if (data.link.url) {
-            void fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/hit`, {
-              method: "POST",
-              keepalive: true,
-            }).catch(() => {});
-            window.location.replace(data.link.url);
-            return;
-          }
-          setState("missing");
-        },
-      )
-      .catch(() => {
-        if (alive) setState("missing");
-      });
+    const t = window.setTimeout(() => {
+      if (initial) {
+        /* only a redirect still needs doing; other states rendered already */
+        if (initial !== "missing" && initial.type === "redirect") apply(initial);
+        return;
+      }
+      resolve()
+        .then((d) => alive && apply(d))
+        .catch(() => alive && setState("missing"));
+    }, 0);
     return () => {
       alive = false;
+      window.clearTimeout(t);
     };
-  }, [cleanSlug, initialState]);
+  }, []);
 
   const unlock = () => {
     if (!pw.trim() || unlocking) return;
     setUnlocking(true);
     setPwWrong(false);
-    fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/unlock`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password: pw }),
-    })
-      .then(async (r) => {
-        if (r.status === 200) {
-          const d = (await r.json()) as { url?: string };
-          if (d.url) {
-            setUnlockedUrl(d.url);
-            setState("unlocked");
-            void fetch(`/api/v1/links/${encodeURIComponent(cleanSlug)}/hit`, {
-              method: "POST",
-              keepalive: true,
-            }).catch(() => {});
-            window.location.replace(d.url);
-            return;
-          }
-        }
-        setPwWrong(true);
-        inputRef.current?.focus();
-      })
+    resolve(pw)
+      .then(apply)
       .catch(() => setPwWrong(true))
       .finally(() => setUnlocking(false));
   };
+
+  const [h1, h2] = HEADLINE[state];
 
   return (
     <div className="kz-root flex min-h-dvh flex-col">
       <KozaNav />
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-8">
         <h1 className="text-balance text-center text-3xl font-medium tracking-[-0.02em] text-[var(--kz-mist)] sm:text-4xl">
-          {state === "missing" ? (
-            <>
-              Link not{" "}
-              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
-                found
-              </span>
-              .
-            </>
-          ) : state === "unlocked" ? (
-            <>
-              Redirecting{" "}
-              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
-                now
-              </span>
-              .
-            </>
-          ) : (
-            <>
-              Protected{" "}
-              <span className="bg-gradient-to-r from-[var(--kz-coral)] to-[#ffb0a6] bg-clip-text text-transparent">
-                link
-              </span>
-              .
-            </>
-          )}
+          {h1} <span className={accent}>{h2}</span>.
         </h1>
 
         <div className="mt-8 w-full max-w-xl">
           <AnimatePresence mode="wait" initial={false}>
-            {/* ── FALLBACK SKELETON ─────────────────────────────── */}
             {state === "loading" && (
               <motion.div
                 key="loading"
@@ -156,7 +166,7 @@ export function LinkGate({
               </motion.div>
             )}
 
-            {/* ── PASSWORD GATE (Sleek inline bar like Shortener) ── */}
+            {/* ── PASSWORD ─────────────────────────────────────── */}
             {state === "locked" && (
               <motion.div
                 key="locked"
@@ -171,10 +181,7 @@ export function LinkGate({
                   className="kz-edge relative overflow-hidden pb-2.5"
                   style={
                     pwWrong
-                      ? {
-                          boxShadow:
-                            "0 0 0 1px rgba(255,99,99,0.55), 0 12px 36px rgba(0,0,0,0.45)",
-                        }
+                      ? { boxShadow: "0 0 0 1px rgba(255,99,99,0.55), 0 12px 36px rgba(0,0,0,0.45)" }
                       : undefined
                   }
                 >
@@ -231,8 +238,6 @@ export function LinkGate({
                       )}
                     </button>
                   </div>
-
-                  {/* Bottom strip inside card */}
                   <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
                     {pwWrong ? (
                       <span className="kz-mono text-[11.5px] text-[var(--kz-coral)]">
@@ -252,8 +257,67 @@ export function LinkGate({
               </motion.div>
             )}
 
-            {/* ── UNLOCKED / REDIRECTING ────────────────────────── */}
-            {state === "unlocked" && unlockedUrl && (
+            {/* ── NOTICE: the owner's message, then Continue ───── */}
+            {state === "notice" && notice && (
+              <motion.div
+                key="notice"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                className="kz-edge overflow-hidden"
+              >
+                <div className="flex gap-3 px-5 py-5">
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--kz-hairline)] bg-white/[0.04]">
+                    <Info className="h-4 w-4 text-[var(--kz-coral)]" />
+                  </span>
+                  <p className="min-w-0 whitespace-pre-wrap break-words text-[14.5px] leading-relaxed text-[var(--kz-mist)]">
+                    {notice.text}
+                  </p>
+                </div>
+                <div className="flex items-center justify-between gap-3 border-t border-[var(--kz-hairline)] bg-white/[0.02] p-2 pl-4">
+                  <span className="kz-mono min-w-0 truncate text-[11.5px] text-[var(--kz-smoke)]">
+                    continues to <span className="text-[var(--kz-ash)]">{hostOf(notice.url)}</span>
+                  </span>
+                  <button
+                    type="button"
+                    autoFocus
+                    onClick={() => go(notice.url)}
+                    className="kz-cta flex h-10 shrink-0 cursor-pointer items-center gap-1.5 rounded-[9px] px-4 text-[13px]"
+                  >
+                    Continue <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── BLOCKED ──────────────────────────────────────── */}
+            {state === "blocked" && (
+              <motion.div
+                key="blocked"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                className="kz-edge overflow-hidden pb-2.5"
+              >
+                <div className="flex min-h-[56px] items-center gap-3 border-b border-[var(--kz-hairline)] bg-white/[0.02] px-4 py-3">
+                  <Ban className="h-4 w-4 shrink-0 text-[var(--kz-coral)]" />
+                  <p className="min-w-0 whitespace-pre-wrap break-words text-[14px] text-[var(--kz-mist)]">
+                    {blockText || "This link isn't available to you."}
+                  </p>
+                </div>
+                <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
+                  <span className="kz-mono text-[11.5px] text-[var(--kz-smoke)]">
+                    {getSite().host}/<span className="text-[var(--kz-ash)]">{cleanSlug}</span>
+                  </span>
+                  <span className="kz-mono text-[11px] text-[var(--kz-smoke)]">blocked by the link owner</span>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── REDIRECTING ──────────────────────────────────── */}
+            {state === "unlocked" && targetUrl && (
               <motion.div
                 key="unlocked"
                 initial={{ opacity: 0, scale: 0.98 }}
@@ -266,20 +330,18 @@ export function LinkGate({
                       <Check className="h-4 w-4" strokeWidth={2.5} />
                     </span>
                     <span className="kz-mono truncate text-[14px] text-[var(--kz-mist)]">
-                      {hostOf(unlockedUrl)}
+                      {hostOf(targetUrl)}
                     </span>
                   </div>
                   <span className="kz-mono text-[11px] text-emerald-400">opening…</span>
                 </div>
                 <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
-                  <span className="kz-mono truncate text-[11.5px] text-[var(--kz-smoke)]">
-                    {unlockedUrl}
-                  </span>
+                  <span className="kz-mono truncate text-[11.5px] text-[var(--kz-smoke)]">{targetUrl}</span>
                 </div>
               </motion.div>
             )}
 
-            {/* ── 404 MISSING (Clean inline card) ───────────────── */}
+            {/* ── 404 ──────────────────────────────────────────── */}
             {state === "missing" && (
               <motion.div
                 key="missing"
