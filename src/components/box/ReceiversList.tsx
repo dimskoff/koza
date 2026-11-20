@@ -6,14 +6,16 @@ import { Check, LogOut, TriangleAlert } from "lucide-react";
 import { PeerAvatar, PeerSpin } from "./visuals";
 import { TransportBadge } from "./TransportBadge";
 import type { TransportMode } from "./webrtc";
-import { fmtSpeed, prettySize } from "./lib";
+import { fmtSpeed, peerLabel, prettySize } from "./lib";
 
 export type ReceiverStatus = "connecting" | "sending" | "done" | "failed" | "left";
 
 export interface ReceiverRow {
   peer: string;
-  /** 1-based join order, for a friendly label */
+  /** 1-based join order */
   n: number;
+  /** friendly peer name: Nomad, Atlas, … */
+  name: string;
   status: ReceiverStatus;
   moved: number;
   bps: number;
@@ -48,10 +50,10 @@ export function ReceiversList({ rows, total }: { rows: ReceiverRow[]; total: num
               className="kz-inset px-3.5 py-3"
             >
               <div className="flex items-center gap-3">
-                <PeerAvatar name={String(r.n)} size={32} />
+                <PeerAvatar name={r.name} size={32} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">Friend {r.n}</p>
+                    <p className="text-[13.5px] font-medium text-[var(--kz-mist)]">{peerLabel(r.name)}</p>
                     {(r.status === "sending" || r.status === "done") && (
                       <TransportBadge mode={r.transport} />
                     )}

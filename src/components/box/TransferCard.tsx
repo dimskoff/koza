@@ -22,7 +22,15 @@ import { KozaQr } from "../koza/QrCode";
 import { FileGlyph, FingerprintHover, PeerSpin, ScanSweep } from "./visuals";
 import { BoxLobby, BoxSender, computeTransferFingerprint } from "./webrtc";
 import { ReceiversList, type ReceiverRow } from "./ReceiversList";
-import { type BoxFile, fmtDuration, prettySize, shortLinkOf, SpeedMeter } from "./lib";
+import {
+  type BoxFile,
+  fmtDuration,
+  PEER_NAMES,
+  peerLabel,
+  prettySize,
+  shortLinkOf,
+  SpeedMeter,
+} from "./lib";
 
 /* collect → live (room open, any number of friends download) → back to collect */
 type Stage = "collect" | "live" | "error";
@@ -55,6 +63,8 @@ export function TransferCard() {
   const lobbyRef = useRef<BoxLobby | null>(null);
   const sessionsRef = useRef(new Map<string, Session>());
   const joinCounter = useRef(0);
+  /* random starting point, so the first friend isn't always "Atlas" */
+  const nameOffset = useRef(0);
   const stagedRef = useRef<StagedItem[]>([]);
   const codeRef = useRef("");
   const tokenRef = useRef("");
@@ -161,6 +171,9 @@ export function TransferCard() {
         row: {
           peer,
           n: existing?.row.n ?? joinCounter.current,
+          name:
+            existing?.row.name ??
+            PEER_NAMES[(nameOffset.current + joinCounter.current - 1) % PEER_NAMES.length],
           status: "connecting",
           moved: 0,
           bps: 0,
@@ -200,7 +213,7 @@ export function TransferCard() {
         onFileDone: () => {},
         onAllDone: () => {
           set({ status: "done", moved: stagedRef.current.reduce((a, x) => a + x.meta.size, 0), bps: 0 });
-          toast.success(`Delivered to friend ${s.row.n}`);
+          toast.success(`Delivered to ${peerLabel(s.row.name)}`);
           window.setTimeout(() => {
             s.engine?.dispose();
             s.engine = null;
@@ -266,6 +279,7 @@ export function TransferCard() {
     );
     disposeAll();
     joinCounter.current = 0;
+    nameOffset.current = Math.floor(Math.random() * PEER_NAMES.length);
     setRows([]);
     setElapsed(0);
     setStage("live");
@@ -313,7 +327,7 @@ export function TransferCard() {
     setStage("collect");
     toast(
       delivered > 0
-        ? `Line closed · delivered to ${delivered} friend${delivered > 1 ? "s" : ""}`
+        ? `Line closed · delivered to ${delivered} peer${delivered > 1 ? "s" : ""}`
         : "Line closed",
     );
   };
@@ -571,12 +585,9 @@ export function TransferCard() {
                   <div className="flex items-center gap-2.5">
                     <PeerSpin />
                     <p className="text-[14px] font-medium text-[var(--kz-mist)]">
-                      Waiting for friends
+                      Looking for peers
                     </p>
                   </div>
-                  <p className="kz-mono mt-1.5 text-[11.5px] text-[var(--kz-smoke)]">
-                    share the link · anyone with it can download · keep this tab open
-                  </p>
                   <div className="mt-3.5">
                     <ScanSweep />
                   </div>
@@ -608,6 +619,30 @@ export function TransferCard() {
               Close line
             </button>
           </div>
+
+          {/* once someone has the files, offer a fresh start (closes this line) */}
+          <AnimatePresence initial={false}>
+            {deliveredCount > 0 && (
+              <motion.div
+                key="new"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.26, ease: [0.32, 0.72, 0, 1] }}
+                className="overflow-hidden"
+              >
+                <button
+                  onClick={() => {
+                    resetAll();
+                    toast(`Line closed · delivered to ${deliveredCount} peer${deliveredCount > 1 ? "s" : ""}`);
+                  }}
+                  className="kz-neutral-btn mt-3 flex h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm"
+                >
+                  <Plus className="h-4 w-4" /> New transfer
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 

@@ -137,7 +137,21 @@ export class SpeedMeter {
   }
 }
 
-export const PEER_NAMES = ["atlas", "vireo", "nomad", "kestrel", "lumen", "sable"];
+export const PEER_NAMES = [
+  "atlas",
+  "vireo",
+  "nomad",
+  "kestrel",
+  "lumen",
+  "sable",
+  "orion",
+  "ember",
+  "drift",
+  "quill",
+];
+
+/* "nomad" → "Nomad" */
+export const peerLabel = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 export function pickPeer(): { name: string; device: string } {
   const name = PEER_NAMES[Math.floor(Math.random() * PEER_NAMES.length)];
