@@ -27,14 +27,29 @@ export function PolicyContent() {
           <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--kz-ash)]">
             When you shorten a URL, we store the destination URL, the short slug, the creation time,
             a click counter and, optionally, a salted <code className={code}>scrypt</code> password
-            hash. Links are not listed publicly. We do not keep access logs with visitor IP
-            addresses; IPs are held in memory for a minute at most, for rate limiting only.
+            hash, plus the link&apos;s rules if you added any. Links are not listed publicly. We do
+            not keep access logs: visitor IP addresses are held in memory for a minute at most, for
+            rate limiting and the &quot;IP burst&quot; rule.
+          </p>
+        </div>
+
+        <div className="p-5">
+          <h2 className="text-[14px] font-medium text-[var(--kz-mist)]">2. Link rules</h2>
+          <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--kz-ash)]">
+            When a link has rules, opening it is checked against them at that moment using your IP
+            address, browser and device type (user agent), browser language, the page you came from
+            and the link&apos;s <code className={code}>?parameters</code>. None of this is saved —
+            only the link&apos;s click counter goes up. Only for rules about country, VPN or
+            datacenter, the IP address is looked up at{" "}
+            <code className={code}>proxycheck.io</code> (fallback{" "}
+            <code className={code}>ipwho.is</code>) over HTTPS; the answer is kept in memory for an
+            hour and never written to disk. Links without such rules never trigger a lookup.
           </p>
         </div>
 
         <div className="p-5">
           <h2 className="text-[14px] font-medium text-[var(--kz-mist)]">
-            2. File transfers ({boxHost})
+            3. File transfers ({boxHost})
           </h2>
           <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--kz-ash)]">
             Whenever possible files travel{" "}
@@ -47,7 +62,7 @@ export function PolicyContent() {
         </div>
 
         <div className="p-5">
-          <h2 className="text-[14px] font-medium text-[var(--kz-mist)]">3. Local browser storage</h2>
+          <h2 className="text-[14px] font-medium text-[var(--kz-mist)]">4. Local browser storage</h2>
           <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--kz-ash)]">
             Your recent links list lives only in your browser&apos;s{" "}
             <code className={code}>localStorage</code>. No tracking cookies, no analytics. Site icons

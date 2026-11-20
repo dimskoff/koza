@@ -19,6 +19,10 @@ No accounts, no ads, no analytics. Self-hostable with one `docker compose up`.
 - No accounts, no tracking cookies. Your own links are listed only in your browser (`localStorage`).
 - Custom slugs (`koza.click/gh`), QR codes, click counter.
 - Optional password per link — salted `scrypt`, unlocked server-side.
+- **Link rules** — "IF … THEN …", first match wins: route, password-protect, warn
+  (notice + Continue) or block by country, VPN/proxy, datacenter IP, IP / subnet, IP
+  burst, visit count, URL parameter, device, OS, language, referrer, date or a random
+  share (A/B). One-click presets: iPhone → App Store, block bots / VPN, expiry, limits.
 - Abuse guards: private/LAN addresses, URLs with embedded credentials and links back to the
   service itself are refused; optional domain blocklist and Google Safe Browsing check.
 
@@ -108,6 +112,8 @@ All variables are documented in [`.env.example`](./.env.example). The important 
 | `KOZA_CORS_ORIGINS` | base + box URL | Extra origins allowed to call the API from a browser. |
 | `KOZA_BLOCKED_DOMAINS` | — | Comma list of domains that can't be shortened. `/data/blocklist.txt` is also read. |
 | `KOZA_SAFE_BROWSING_KEY` | — | Google Safe Browsing v4 key for destination checks. |
+| `KOZA_PROXYCHECK_KEY` | — | Optional proxycheck.io key for country / VPN rules (more free lookups). |
+| `KOZA_GEO_LOOKUP` | `1` | `0` disables IP lookups (country / VPN / datacenter rules never match). |
 | `KOZA_TURN_SECRET` | — | coturn `use-auth-secret`; enables TURN credentials. |
 | `KOZA_ROOM_TTL_MS` | `3600000` | Room lifetime. |
 
@@ -137,7 +143,7 @@ curl -X POST https://koza.click/api/v1/box/rooms \
 
 | Endpoint | Auth |
 | --- | --- |
-| `POST /shorten`, `GET /links/{slug}`, `POST /links/{slug}/unlock` | public, rate limited |
+| `POST /shorten` (`rules` optional), `GET /links/{slug}`, `POST /links/{slug}/resolve` | public, rate limited |
 | `POST /box/rooms`, `GET /box/rooms/{code}` | public, rate limited |
 | `DELETE /box/rooms/{code}` | `x-koza-token` (sender) or admin |
 | `GET /links`, `GET /box/rooms`, `DELETE /links/{slug}` | admin (`x-koza-key`) |
