@@ -7,7 +7,7 @@ RUN addgroup -S koza && adduser -S koza -G koza
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-COPY server.js ./
+COPY server.js rules.js geo.js ./
 
 ENV PORT=8787 \
     KOZA_DATA_DIR=/data \

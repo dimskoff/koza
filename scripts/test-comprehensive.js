@@ -513,6 +513,78 @@ function wsOpen(url, onBinary) {
   ok("Sender cannot attach to a receiver that does not exist", bad9.reason === "no-peer");
   for (const s of [...tx9, lobby9, lane9, recv9[0].rx, recv9[2].rx]) s.close();
 
+  console.log("\n── Test 10: Link rules ──");
+  const mkLink = (payload) =>
+    fetch(`${HTTP}/api/v1/shorten`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  const resolve10 = async (slug, body = {}, headers = {}) => {
+    const r = await fetch(`${HTTP}/api/v1/links/${slug}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+    return (await r.json()).decision;
+  };
+  const DESKTOP = { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0" };
+  const IPHONE = { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148" };
+
+  const bad10 = await mkLink({ url: "example.com", rules: [{ when: [{ field: "nope", op: "is" }], then: { action: "block" } }] });
+  ok("Unknown condition rejected (400)", bad10.status === 400);
+  const bad10b = await mkLink({ url: "example.com", rules: [{ when: [], then: { action: "redirect", url: "javascript:alert(1)" } }] });
+  ok("Rule redirect to a bad target rejected (400)", bad10b.status === 400);
+
+  const r10 = await mkLink({
+    url: "https://example.com/main",
+    rules: [
+      { when: [{ field: "param", op: "is", key: "src", value: "tg" }], then: { action: "redirect", url: "https://t.me/koza" } },
+      { when: [{ field: "device", op: "is", value: "bot" }], then: { action: "block", text: "no bots" } },
+      { when: [{ field: "os", op: "is", value: "ios" }], then: { action: "redirect", url: "https://apps.apple.com/app/x" } },
+      { when: [{ field: "language", op: "is", value: "ru" }], then: { action: "notice", text: "Привет" } },
+      { when: [{ field: "param", op: "exists", key: "vip" }], then: { action: "password", password: "open-sesame" } },
+    ],
+  });
+  const j10 = await r10.json();
+  const s10 = j10.link?.slug;
+  ok("Link with 5 rules created (201)", r10.status === 201 && j10.link?.rules === 5);
+  const info10 = await (await fetch(`${HTTP}/api/v1/links/${s10}`)).json();
+  ok("Destination of a rules link is not exposed by GET", info10.link?.url === null && info10.link?.rules === 5);
+
+  const d1 = await resolve10(s10, {}, DESKTOP);
+  ok("No rule matches → main destination", d1.type === "redirect" && d1.url === "https://example.com/main");
+  const d2 = await resolve10(s10, { query: "src=tg" }, DESKTOP);
+  ok("URL parameter rule redirects", d2.type === "redirect" && d2.url === "https://t.me/koza");
+  const d3 = await resolve10(s10, {}, { "user-agent": "TelegramBot (like TwitterBot)" });
+  ok("Bot is blocked with its message", d3.type === "block" && d3.text === "no bots");
+  const d4 = await resolve10(s10, {}, IPHONE);
+  ok("iOS goes to the App Store link", d4.type === "redirect" && d4.url.includes("apps.apple.com"));
+  const d5 = await resolve10(s10, {}, { ...DESKTOP, "accept-language": "ru-RU,ru;q=0.9" });
+  ok("Language rule shows a notice with Continue target", d5.type === "notice" && d5.text === "Привет" && d5.url === "https://example.com/main");
+  const d6 = await resolve10(s10, { query: "vip=1" }, DESKTOP);
+  ok("Password rule asks for a password", d6.type === "password" && !d6.wrong);
+  const d7 = await resolve10(s10, { query: "vip=1", password: "nope" }, DESKTOP);
+  ok("Wrong rule password is rejected", d7.type === "password" && d7.wrong === true);
+  const d8 = await resolve10(s10, { query: "vip=1", password: "open-sesame" }, DESKTOP);
+  ok("Right rule password opens the destination", d8.type === "redirect" && d8.url === "https://example.com/main");
+
+  const direct10 = await fetch(`${HTTP}/${s10}?src=tg`, { redirect: "manual", headers: DESKTOP });
+  ok("Direct GET applies rules too (302 → t.me)", direct10.status === 302 && direct10.headers.get("location") === "https://t.me/koza");
+
+  const r10b = await mkLink({
+    url: "https://example.com/b",
+    rules: [
+      { when: [{ field: "visits", op: "gt", value: 1 }], then: { action: "block", text: "sold out" } },
+      { when: [{ field: "date", op: "after", value: "2000-01-01T00:00:00Z" }, { field: "ip_burst", op: "gt", value: 5 }], then: { action: "block", text: "slow down" } },
+    ],
+  });
+  const s10b = (await r10b.json()).link.slug;
+  const v1 = await resolve10(s10b, {}, DESKTOP);
+  const v2 = await resolve10(s10b, {}, DESKTOP);
+  const v3 = await resolve10(s10b, {}, DESKTOP);
+  ok("Visit counter rule: first 2 pass, then blocked", v1.type === "redirect" && v2.type === "redirect" && v3.type === "block" && v3.text === "sold out");
+
   console.log(`\n========================================`);
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);
   console.log(`========================================`);

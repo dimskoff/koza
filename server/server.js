@@ -21,6 +21,8 @@ const crypto = require("node:crypto");
 const os = require("node:os");
 const util = require("node:util");
 const { WebSocketServer } = require("ws");
+const linkRules = require("./rules");
+const { lookupIp } = require("./geo");
 
 const scryptAsync = util.promisify(crypto.scrypt);
 const VERSION = require("./package.json").version;
@@ -633,14 +635,91 @@ function closeSubLine(code, reason) {
 /* ── wire shapes ────────────────────────────────────────────────────── */
 function publicLink(l, origin, includeProtectedUrl = false) {
   const isLocked = Boolean(l.password);
+  const ruleCount = Array.isArray(l.rules) ? l.rules.length : 0;
+  /* links with rules never reveal their destination here — otherwise a
+   * blocked visitor could just read it from the API */
+  const hidden = (isLocked || ruleCount > 0) && !includeProtectedUrl;
   return {
     slug: l.slug,
-    url: isLocked && !includeProtectedUrl ? null : l.url,
+    url: hidden ? null : l.url,
     short_url: `${origin}/${l.slug}`,
     password: isLocked,
+    rules: ruleCount,
     clicks: l.clicks,
     created_at: new Date(l.createdAt).toISOString(),
   };
+}
+
+/* ── link rules: who goes where ─────────────────────────────────────── */
+
+/* hits per (link, IP) in the last minute — in memory only, for "IP burst" */
+const burstHits = new Map(); // `${slug}|${ip}` → number[] (timestamps)
+
+function bumpBurst(slug, ip) {
+  const key = `${slug}|${ip}`;
+  const now = Date.now();
+  const arr = (burstHits.get(key) || []).filter((t) => now - t < 60_000);
+  arr.push(now);
+  if (burstHits.size > 100_000) burstHits.clear();
+  burstHits.set(key, arr);
+  return arr.length;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, arr] of burstHits) if (!arr.some((t) => now - t < 60_000)) burstHits.delete(k);
+}, 60_000).unref();
+
+function countClick(link, req) {
+  if (allowRate(req, "hit", 30, 60_000)) {
+    link.clicks += 1;
+    saveDb();
+  }
+}
+
+/* Decide what a visitor gets: { type: "redirect", url } | { type: "password",
+ * wrong? } | { type: "notice", text, url } | { type: "block", text }.
+ * `extra`: { password?, query?, referrer? } from the page that asks. */
+async function resolveLink(link, req, extra = {}) {
+  const password = typeof extra.password === "string" ? extra.password : "";
+
+  if (link.password) {
+    if (!password) return { type: "password" };
+    if (!(await verifyPass(link.password, password))) return { type: "password", wrong: true };
+  }
+
+  const rules = Array.isArray(link.rules) ? link.rules : [];
+  let decision = { type: "redirect", url: link.url };
+
+  if (rules.length) {
+    const ip = clientIp(req);
+    let geo = null;
+    const ctx = {
+      ip,
+      ua: req.headers["user-agent"] || "",
+      lang: req.headers["accept-language"] || "",
+      referrer: typeof extra.referrer === "string" ? extra.referrer : req.headers.referer || "",
+      query: new URLSearchParams(typeof extra.query === "string" ? extra.query.slice(0, 2000) : ""),
+      now: Date.now(),
+      clicks: link.clicks,
+      burst: bumpBurst(link.slug, ip),
+      geo: () => (geo ??= lookupIp(ip)),
+    };
+    const i = await linkRules.firstMatch(rules, ctx);
+    if (i >= 0) {
+      const t = rules[i].then;
+      if (t.action === "redirect") decision = { type: "redirect", url: t.url };
+      else if (t.action === "block") decision = { type: "block", text: t.text || "" };
+      else if (t.action === "notice") decision = { type: "notice", text: t.text, url: link.url };
+      else if (t.action === "password") {
+        if (!password) decision = { type: "password" };
+        else if (!(await verifyPass(t.password, password))) decision = { type: "password", wrong: true };
+      }
+    }
+  }
+
+  if (decision.type === "redirect" || decision.type === "notice") countClick(link, req);
+  return decision;
 }
 
 function roomExpiry(r) {
@@ -1008,7 +1087,9 @@ const server = http.createServer(async (req, res) => {
             "GET /links": "list all links (admin: x-koza-key)",
             "GET /links/{slug}": "look up one link, clicks included",
             "POST /links/{slug}/hit": "count a click",
-            "POST /links/{slug}/unlock": "trade a password for the destination url",
+            "POST /links/{slug}/resolve":
+              "where this visitor goes — runs password + rules: { password?, query?, referrer? }",
+            "POST /links/{slug}/unlock": "trade a password for the destination url (legacy)",
             "DELETE /links/{slug}": "delete a link (admin: x-koza-key)",
           },
           box: {
@@ -1066,12 +1147,27 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, req, 400, { error: "password too short — at least 4 characters" });
       }
 
+      let rules = [];
+      try {
+        rules = await linkRules.validateRules(body.rules, { normalizeUrl, destinationError });
+      } catch (err) {
+        if (err instanceof linkRules.RuleError) return sendJson(res, req, 400, { error: err.message });
+        throw err;
+      }
+      for (const r of rules) {
+        if (r.then.action === "password") {
+          const s = newSalt();
+          r.then.password = { kind: "scrypt", salt: s, hash: await hashPass(r.then.password, s) };
+        }
+      }
+
       const salt = newSalt();
       const hashedPw = pw ? await hashPass(pw, salt) : null;
       const link = {
         slug,
         url: normalized,
         password: pw ? { kind: "scrypt", salt, hash: hashedPw } : null,
+        ...(rules.length ? { rules } : {}),
         clicks: 0,
         createdAt: Date.now(),
       };
@@ -1119,6 +1215,21 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, req, 200, { slug, clicks: link.clicks });
     }
 
+    /* POST /links/{slug}/resolve — where does THIS visitor go? Runs the link
+     * password and the link rules. body: { password?, query?, referrer? } */
+    if ((m = pathname.match(/^\/api\/v1\/links\/([^/]+)\/resolve$/)) && req.method === "POST") {
+      const body = await readJson(req);
+      const tryingPassword = typeof body.password === "string" && body.password.length > 0;
+      if (!allowRate(req, tryingPassword ? "unlock" : "resolve", tryingPassword ? 20 : 120, 60_000)) {
+        return sendJson(res, req, 429, { error: "too many attempts — try again later" });
+      }
+      const slug = decodeParam(m[1]).toLowerCase();
+      const link = db.links[slug];
+      if (!link) return sendJson(res, req, 404, { error: "no such link" });
+      return sendJson(res, req, 200, { decision: await resolveLink(link, req, body) });
+    }
+
+    /* legacy: trade the link password for the destination */
     if ((m = pathname.match(/^\/api\/v1\/links\/([^/]+)\/unlock$/)) && req.method === "POST") {
       if (!allowRate(req, "unlock", 20, 60_000)) {
         return sendJson(res, req, 429, { error: "too many password attempts — try again later" });
@@ -1126,13 +1237,11 @@ const server = http.createServer(async (req, res) => {
       const slug = decodeParam(m[1]).toLowerCase();
       const link = db.links[slug];
       if (!link) return sendJson(res, req, 404, { error: "no such link" });
-      if (!link.password) return sendJson(res, req, 200, { url: link.url, unlocked: true });
       const body = await readJson(req);
-      const pw = typeof body.password === "string" ? body.password : "";
-      if (!(await verifyPass(link.password, pw))) {
-        return sendJson(res, req, 403, { error: "wrong password" });
-      }
-      return sendJson(res, req, 200, { url: link.url, unlocked: true });
+      const d = await resolveLink(link, req, { password: typeof body.password === "string" ? body.password : "" });
+      if (d.type === "redirect") return sendJson(res, req, 200, { url: d.url, unlocked: true });
+      if (d.type === "password") return sendJson(res, req, 403, { error: "wrong password" });
+      return sendJson(res, req, 403, { error: "use POST /links/{slug}/resolve", decision: d.type });
     }
 
     /* ── box rooms ── */
@@ -1252,19 +1361,20 @@ const server = http.createServer(async (req, res) => {
       const slug = pathname.slice(1).toLowerCase();
       if (slug && !RESERVED.has(slug) && SLUG_RE.test(slug) && db.links[slug]) {
         const link = db.links[slug];
-        if (link.password) {
+        const d = await resolveLink(link, req, { query: url.search.slice(1) });
+        if (d.type === "redirect") {
+          res.writeHead(302, { location: d.url, "cache-control": "no-store", ...SECURITY_HEADERS });
+          return res.end();
+        }
+        if (d.type === "password") {
           return sendJson(res, req, 403, {
-            error: "password required — unlock via POST /api/v1/links/:slug/unlock",
+            error: "password required — POST /api/v1/links/:slug/resolve { password }",
             slug,
             locked: true,
           });
         }
-        if (allowRate(req, "hit", 30, 60_000)) {
-          link.clicks += 1;
-          saveDb();
-        }
-        res.writeHead(302, { location: link.url, "cache-control": "no-store", ...SECURITY_HEADERS });
-        return res.end();
+        if (d.type === "block") return sendJson(res, req, 403, { error: d.text || "access blocked", blocked: true });
+        return sendJson(res, req, 200, { notice: d.text, url: d.url });
       }
     }
 
