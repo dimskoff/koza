@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 "use client";
 
+import { RulesModal } from "./RuleEditor";
+import { toApiRules, type RuleDraft } from "./rules";
 import { getSite } from "@/lib/site";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -17,6 +19,7 @@ import {
   QrCode,
   Sparkles,
   X,
+  Waypoints,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Kbd } from "@/components/ui/kbd";
@@ -38,6 +41,9 @@ export function Shortener() {
   const [slug, setSlug] = useState("");
   const [passwordOn, setPasswordOn] = useState(false);
   const [password, setPassword] = useState("");
+  const [rules, setRules] = useState<RuleDraft[]>([]);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const closeRules = useCallback(() => setRulesOpen(false), []);
   const [showPassword, setShowPassword] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<KozaLink | null>(null);
@@ -98,6 +104,7 @@ export function Shortener() {
           url: normalized,
           ...(slugTrimmed ? { slug: slugTrimmed } : {}),
           ...(pw ? { password: pw } : {}),
+          ...(rules.length ? { rules: toApiRules(rules) } : {}),
         }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -143,7 +150,7 @@ export function Shortener() {
         description: shortUrlOf(link.slug),
       });
     }
-  }, [phase, destination, slugTrimmed, baseError, taken, passwordOn, password]);
+  }, [phase, destination, slugTrimmed, baseError, taken, passwordOn, password, rules]);
 
   const reset = () => {
     setResult(null);
@@ -151,6 +158,7 @@ export function Shortener() {
     setSlug("");
     setPassword("");
     setPasswordOn(false);
+    setRules([]);
     setAdvancedOpen(false);
     setPhase("idle");
     setCopied(false);
@@ -405,20 +413,37 @@ export function Shortener() {
         <div className="flex items-center justify-between px-4 pb-0.5 pt-2.5">
           {!isDone ? (
             <>
-              <button
-                onClick={() => setAdvancedOpen((v) => !v)}
-                aria-expanded={advancedOpen}
-                className="kz-mono flex cursor-pointer items-center gap-2 text-xs text-[var(--kz-ash)] transition-colors hover:text-[var(--kz-mist)]"
-              >
-                <AtSign className="h-3.5 w-3.5" />
-                Advanced options
-                <span
-                  className={`text-[10px] transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`}
-                  aria-hidden="true"
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setAdvancedOpen((v) => !v)}
+                  aria-expanded={advancedOpen}
+                  className="kz-mono flex cursor-pointer items-center gap-2 text-xs text-[var(--kz-ash)] transition-colors hover:text-[var(--kz-mist)]"
                 >
-                  ▾
-                </span>
-              </button>
+                  <AtSign className="h-3.5 w-3.5" />
+                  Advanced options
+                  <span
+                    className={`text-[10px] transition-transform duration-200 ${advancedOpen ? "rotate-180" : ""}`}
+                    aria-hidden="true"
+                  >
+                    ▾
+                  </span>
+                </button>
+                <span className="h-3 w-px bg-[var(--kz-hairline-strong)]" aria-hidden="true" />
+                {/* link rules live in their own modal — the card stays small */}
+                <button
+                  onClick={() => setRulesOpen(true)}
+                  className="kz-mono flex cursor-pointer items-center gap-1.5 text-xs text-[var(--kz-ash)] transition-colors hover:text-[var(--kz-mist)]"
+                  title="Route, block or warn visitors by device, country, VPN…"
+                >
+                  <Waypoints className={`h-3.5 w-3.5 ${rules.length ? "text-[var(--kz-coral)]" : ""}`} />
+                  Rules
+                  {rules.length > 0 && (
+                    <span className="rounded-full bg-[rgba(255,99,99,0.16)] px-1.5 text-[10px] leading-4 text-[var(--kz-coral)]">
+                      {rules.length}
+                    </span>
+                  )}
+                </button>
+              </div>
               <span className="kz-mono hidden items-center gap-1.5 text-[11px] text-[var(--kz-smoke)] md:inline-flex">
                 <Kbd>Enter ↵</Kbd> to shorten
               </span>
@@ -542,6 +567,8 @@ export function Shortener() {
           )}
         </AnimatePresence>
       </div>
+
+      <RulesModal open={rulesOpen} onClose={closeRules} rules={rules} onChange={setRules} />
 
       {/* ── QR modal ───────────────────────────────────────────── */}
       <AnimatePresence>
